@@ -1393,209 +1393,181 @@ async function solveFunCaptchaVision(tabId, msg) {
 
   // rotation challenge solver
   if (isRotateChallenge && batchB64s && batchB64s.length > 0) {
-    ccLog(tabId, 'FUNCAPTCHA: ★ Clock-encode rotation solver — ' + total + ' candidates in ' + batchB64s.length + ' batch(es)');
+    ccLog(tabId, 'FUNCAPTCHA: ROT direct-visual solver — ' + total + ' candidates in ' + batchB64s.length + ' batch(es)');
     const rStart = Date.now();
 
-    const clockGuide =
-      'Use a CLOCK FACE overlaid on the image to describe directions.\n' +
-      '  12 = up, 3 = right, 6 = down, 9 = left,\n' +
-      '  1-2 = up-right, 4-5 = down-right, 7-8 = down-left, 10-11 = up-left.\n' +
-      '  If the direction falls BETWEEN two hours, use a half-hour value like "3:30" (between 3 and 4).\n' +
-      'Answer with the hour (or half-hour) that best matches the direction.';
+    // object-type hint for front detection
+    const objectHint = (() => {
+      const p = (prompt || '').toLowerCase();
+      if (/car|vehicle|suv|truck|van|auto/.test(p)) return 'Vehicle: FRONT = hood/headlight end (NOT the trunk/rear).';
+      if (/lawn.?mow|mower/.test(p)) return 'Lawn mower: FRONT = blade-deck cutting end.';
+      if (/motor.?bike|motorcycle|bike/.test(p)) return 'Motorcycle: FRONT = headlight/front-wheel end.';
+      if (/plane|aircraft|jet/.test(p)) return 'Aircraft: FRONT = nose/cockpit end.';
+      if (/boat|ship/.test(p)) return 'Boat: FRONT = bow (pointed end).';
+      return 'Identify the FRONT of the 3D object (lights, sharp nose, cutting edge, etc).';
+    })();
 
-    // decode target direction
-    let targetAngle = null;
+    const batchDescDirect = batchB64s.length === 1
+      ? 'IMAGE 2: All ' + total + ' candidate tiles labelled [1] through [' + total + '].\n'
+      : 'IMAGE 2: Candidate tiles [1]-[' + Math.ceil(total / 2) + '].\n' +
+        'IMAGE 3: Candidate tiles [' + (Math.ceil(total / 2) + 1) + ']-[' + total + '].\n';
+
+    // Pass 1: direct visual comparison with confidence score
+    const directText =
+      'ARKOSE FUNCAPTCHA -- 3D ROTATION CHALLENGE\n\n' +
+      'IMAGE 1: Wooden hand indicator. FINGERTIPS show the REQUIRED direction.\n' +
+      '  Look at where extended fingers AIM, not the palm or wrist.\n\n' +
+      batchDescDirect + '\n' +
+      'Each tile shows the SAME 3D object rotated differently.\n' +
+      objectHint + '\n\n' +
+      'TASK: Which tile has the object FRONT facing the same direction as the fingertips?\n\n' +
+      'Step 1 -- Hand: Which compass direction do the fingertips point? (N/S/E/W/NE/NW/SE/SW)\n' +
+      'Step 2 -- Tiles: For each tile [1]-[' + total + '], which direction does the FRONT face?\n' +
+      'Step 3 -- Match: Which tile best matches the hand direction?\n' +
+      'Step 4 -- Confidence: How confident are you? (0-100%)\n\n' +
+      'Reply ONLY with this JSON:\n' +
+      '{"handDirection": "<compass>", "tileFacings": ["<t1>","<t2>",...], "winningIndex": <1-' + total + '>, "confidence": <0-100>}';
+
+    const directContent = [
+      { type: 'text', text: directText },
+      { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
+    ];
+    for (const b of batchB64s) directContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+
+    let directWinner = null;
+    let directConfidence = 0;
+
     try {
-      const aReply = await chatReply({
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'IMAGE 1: a target image from an Arkose FunCAPTCHA rotation challenge.\n' +
-                'It contains a human hand (or arrow/indicator) showing a direction.\n\n' +
-                clockGuide + '\n\n' +
-                'In which general direction does the hand/indicator POINT?\n' +
-                'Consider which way the fingers/thumb point (not the palm or wrist).\n' +
-                'Reply ONLY: {"hour": "3"} or {"hour": "3:30"}'
-            },
-            { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
-          ]
-        }],
+      const directReply = await chatReply({
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a precise 3D orientation analyst. Analyze images carefully. Wrong answers are strictly prohibited. Reply ONLY with the specified JSON. No markdown, no extra text.'
+          },
+          { role: 'user', content: directContent }
+        ],
         temperature: 0,
-        max_tokens: 40
-      }, 20000);
+        max_tokens: 200
+      }, 28000);
 
-      ccLog(tabId, 'FUNCAPTCHA: rotation Stage-A hand direction: ' + String(aReply).trim().slice(0, 80));
-      const am = String(aReply).replace(/```[a-z]*\n?/gi, '').match(/\{[\s\S]*?\}/);
-      if (am) {
+      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 reply: ' + String(directReply).trim().slice(0, 200));
+      const djm = String(directReply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/);
+      if (djm) {
         try {
-          const p = JSON.parse(am[0]);
-          const raw = String(p.hour !== undefined ? p.hour : (p.direction !== undefined ? p.direction : p.clock));
-          const hm = raw.match(/(\d{1,2})\s*(?::\s*30)?/);
-          if (hm) {
-            const h = parseInt(hm[1], 10);
-            if (h >= 1 && h <= 12) targetAngle = (h % 12) * 30 + (/:\s*30/.test(raw) ? 15 : 0);
+          const dp = JSON.parse(djm[0]);
+          const wi = parseInt(dp.winningIndex !== undefined ? dp.winningIndex : dp.winning_index, 10);
+          const conf = parseInt(String(dp.confidence || '0'), 10);
+          if (!isNaN(wi) && wi >= 1 && wi <= total) {
+            directWinner = wi;
+            directConfidence = isNaN(conf) ? 50 : conf;
+            ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 winner=[' + directWinner + '] confidence=' + directConfidence + '% hand=' + (dp.handDirection || '?'));
           }
         } catch {}
       }
-      if (targetAngle === null) {
-        const dm = String(aReply).match(/\b(1[0-2]|[1-9])\s*(?::30)?/);
-        if (dm) targetAngle = (parseInt(dm[1], 10) % 12) * 30 + (/:\s*30/.test(dm[0]) ? 15 : 0);
-      }
     } catch (e) {
-      ccLog(tabId, 'FUNCAPTCHA: rotation Stage-A error: ' + (e.message || e), 'warn');
+      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 error: ' + (e.message || e), 'warn');
     }
 
-    // decode candidate directions
-    let candidateAngles = null;
-    if (targetAngle !== null) {
-      const batchDescR = batchB64s.length === 1
-        ? 'IMAGE 2: Candidate tiles [1] through [' + total + '].\n'
-        : 'IMAGE 2: Candidate tiles [1] through [' + Math.ceil(total / 2) + '].\n' +
-          'IMAGE 3: Candidate tiles [' + (Math.ceil(total / 2) + 1) + '] through [' + total + '].\n';
+    // Pass 2: low-confidence chain-of-thought retry with individual tiles
+    if (directWinner !== null && directConfidence < 65) {
+      ccLog(tabId, 'FUNCAPTCHA: ROT confidence=' + directConfidence + '% < 65 -- Pass-2 chain-of-thought', 'warn');
 
-      const bContent = [{
-        type: 'text',
-        text: 'Arkose FunCAPTCHA rotation challenge — candidate tiles, each showing a vehicle/object at a different rotation.\n\n' +
-          batchDescR + '\n' +
-          clockGuide + '\n\n' +
-          'For EACH candidate tile, determine the direction the object FACES\n' +
-          '(for a vehicle: the direction its front/hood points — headlights, windshield, front wheels).\n' +
-          'Judge only by the object itself, not its shadow.\n\n' +
-          'Reply ONLY with a JSON array of ' + total + ' clock values, e.g.: {"hours": [3, "7:30", 12, 9, 1, 5]}\n' +
-          'Each value is an hour like 3 or a half-hour like "3:30". No other text.'
-      }];
-      for (const b of batchB64s) bContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+      const cotText =
+        'ARKOSE FUNCAPTCHA -- ROTATION CHALLENGE (Deep Analysis)\n\n' +
+        'IMAGE 1: Wooden hand indicator.\n' +
+        'Remaining images: same 3D object in ' + total + ' different rotations, labelled [1]-[' + total + '].\n\n' +
+        objectHint + '\n\n' +
+        '-- ANALYSIS PROTOCOL (follow exactly, wrong answers forbidden) --\n\n' +
+        'A) HAND: Trace wrist -> index/middle fingertips. State exact compass direction + clock position.\n\n' +
+        'B) TILES: For each [1]-[' + total + '], state which compass direction the FRONT faces.\n' +
+        '   Format: [1]=NE, [2]=W, [3]=S ...\n\n' +
+        'C) MATCH: Which tile direction is closest to the hand direction? State your winner and why.\n\n' +
+        'D) VERIFY: Re-examine chosen tile vs hand one more time. Update if needed.\n\n' +
+        'Conclude with:\n' +
+        'FINAL_ANSWER: {"winningIndex": <1-' + total + '>, "confidence": <0-100>}';
+
+      const cotContent = [
+        { type: 'text', text: cotText },
+        { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
+      ];
+      // individual tiles at full resolution
+      if (tileB64s && tileB64s.length > 0) {
+        for (let t = 0; t < Math.min(tileB64s.length, total); t++) {
+          if (tileB64s[t]) {
+            cotContent.push({ type: 'text', text: 'Tile [' + (t + 1) + ']:' });
+            cotContent.push({ type: 'image_url', image_url: { url: toDataUrl(tileB64s[t]) } });
+          }
+        }
+      } else {
+        for (const b of batchB64s) cotContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+      }
 
       try {
-        const bReply = await chatReply({
+        const cotReply = await chatReply({
           messages: [
-            { role: 'system', content: 'You analyze object orientations. Reply ONLY with {"hours": [...]} — exactly ' + total + ' clock values (hour or half-hour like "3:30"), in tile order [1]..[' + total + ']. No commentary.' },
-            { role: 'user', content: bContent }
+            {
+              role: 'system',
+              content: 'You are an expert orientation analyst. Think carefully. Hallucinations and wrong answers are strictly forbidden. Follow the analysis protocol exactly.'
+            },
+            { role: 'user', content: cotContent }
           ],
           temperature: 0,
-          max_tokens: 160
-        }, 25000);
+          max_tokens: 600
+        }, 35000);
 
-        ccLog(tabId, 'FUNCAPTCHA: rotation Stage-B candidate hours: ' + String(bReply).trim().slice(0, 140));
-        const arrM = String(bReply).replace(/```[a-z]*\n?/gi, '').match(/\[[\s\S]*?\]/);
-        if (arrM) {
+        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 CoT: ' + String(cotReply).trim().slice(0, 300));
+        const faM = String(cotReply).match(/FINAL_ANSWER\s*:\s*(\{[\s\S]*?\})/i);
+        if (faM) {
           try {
-            const arr = JSON.parse(arrM[0]);
-            if (Array.isArray(arr) && arr.length) {
-              candidateAngles = [];
-              for (let i = 0; i < total; i++) {
-                const v = arr[i];
-                let ang = null;
-                if (typeof v === 'number' && v >= 1 && v <= 12) ang = (v % 12) * 30;
-                else if (v !== null && v !== undefined) {
-                  const sm = String(v).match(/(\d{1,2})\s*(?::\s*30)?/);
-                  if (sm) {
-                    const h = parseInt(sm[1], 10);
-                    if (h >= 1 && h <= 12) ang = (h % 12) * 30 + (/:\s*30/.test(String(v)) ? 15 : 0);
-                  }
-                }
-                candidateAngles.push(ang);
-              }
+            const fap = JSON.parse(faM[1]);
+            const wi = parseInt(fap.winningIndex !== undefined ? fap.winningIndex : fap.winning_index, 10);
+            if (!isNaN(wi) && wi >= 1 && wi <= total) {
+              const rDuration = Date.now() - rStart;
+              ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 CoT WIN -- tile [' + wi + '] confidence=' + (fap.confidence || '?') + '% in ' + rDuration + 'ms');
+              return { winningIndex: wi, raw: String(cotReply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-cot' };
             }
           } catch {}
         }
-      } catch (e) {
-        ccLog(tabId, 'FUNCAPTCHA: rotation Stage-B error: ' + (e.message || e), 'warn');
-      }
-    }
-
-    // deterministic clock matching
-    if (targetAngle !== null && candidateAngles && candidateAngles.some((a) => a !== null)) {
-      const circDist = (a, b) => {
-        const d = Math.abs(a - b) % 360;
-        return d > 180 ? 360 - d : d;
-      };
-
-      let best = null;
-      let bestDist = 999;
-      const ties = [];
-      candidateAngles.forEach((a, i) => {
-        if (a === null) return;
-        const d = circDist(targetAngle, a);
-        if (d < bestDist) { bestDist = d; best = i + 1; ties.length = 0; ties.push(i + 1); }
-        else if (d === bestDist) ties.push(i + 1);
-      });
-
-      // tie break head to head
-      if (ties.length > 1) {
-        ccLog(tabId, 'FUNCAPTCHA: rotation clock tie ' + JSON.stringify(ties) + ' — full-res head-to-head', 'warn');
-        try {
-          const fmtAngle = (a) => {
-            const h = Math.floor(a / 30) % 12;
-            const hour12 = h === 0 ? 12 : h;
-            return (a % 30) === 15 ? hour12 + ':30' : String(hour12);
-          };
-          const tbText = 'IMAGE 1: a hand/indicator pointing toward the ' + fmtAngle(targetAngle) + ' clock direction.\n\n' +
-            'Each following image is ONE candidate tile, sent in this order: ' + ties.map((t) => '[' + t + ']').join(', ') + '.\n' +
-            'These tiles face SIMILAR directions but only ONE faces the exact same direction as the hand.\n' +
-            'Compare each tile\'s facing direction (front/hood/pointer) against the hand direction —\n' +
-            'the winning tile must face it EXACTLY.\n' +
-            'Reply ONLY: {"winner": <tile number>}';
-          const tbContent = [
-            { type: 'text', text: tbText },
-            { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
-          ];
-          let usedIndividual = false;
-          for (const t of ties) {
-            const tbTile = tileB64s && tileB64s[t - 1];
-            if (tbTile) {
-              usedIndividual = true;
-              tbContent.push({ type: 'text', text: 'Tile [' + t + ']:' });
-              tbContent.push({ type: 'image_url', image_url: { url: toDataUrl(tbTile) } });
-            }
+        // fallback: parse any JSON from response
+        const fbMs = String(cotReply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/g);
+        if (fbMs) {
+          for (const m of [...fbMs].reverse()) {
+            try {
+              const fp = JSON.parse(m);
+              const wi = parseInt(fp.winningIndex !== undefined ? fp.winningIndex : fp.winning_index, 10);
+              if (!isNaN(wi) && wi >= 1 && wi <= total) {
+                const rDuration = Date.now() - rStart;
+                ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 JSON WIN -- tile [' + wi + '] in ' + rDuration + 'ms');
+                return { winningIndex: wi, raw: String(cotReply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-cot-json' };
+              }
+            } catch {}
           }
-          if (!usedIndividual) {
-            for (const b of batchB64s) tbContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
-          }
-
-          const tbReply = await chatReply({
-            messages: [
-              { role: 'system', content: 'Compare orientations precisely. Reply ONLY {"winner": <number>}.' },
-              { role: 'user', content: tbContent }
-            ],
-            temperature: 0,
-            max_tokens: 30
-          }, 15000);
-          ccLog(tabId, 'FUNCAPTCHA: rotation tie-break reply: ' + String(tbReply).trim().slice(0, 80));
-          const tbm = String(tbReply).match(/\{[\s\S]*?\}/);
-          if (tbm) {
-            const parsed = JSON.parse(tbm[0]);
-            const w = parseInt(parsed.winner !== undefined ? parsed.winner : parsed.winningIndex, 10);
-            if (!isNaN(w) && ties.includes(w)) best = w;
-          }
-        } catch (te) {
-          ccLog(tabId, 'FUNCAPTCHA: rotation tie-break failed: ' + (te.message || te), 'warn');
         }
-      }
-
-      if (best !== null) {
-        const rDuration = Date.now() - rStart;
-        ccLog(tabId, 'FUNCAPTCHA: ★★ ROTATION CLOCK WIN — target=' + targetAngle + '° candidates=' + JSON.stringify(candidateAngles) + ' → tile [' + best + '] (delta=' + bestDist + '°) in ' + rDuration + 'ms');
-        return { winningIndex: best, raw: JSON.stringify({ targetAngle, candidateAngles }), durationMs: rDuration, targetDigit: -1, pass: 'clock-match' };
+        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 no parse -- keeping Pass-1', 'warn');
+      } catch (ce) {
+        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 error: ' + (ce.message || ce), 'warn');
       }
     }
 
-    ccLog(tabId, 'FUNCAPTCHA: rotation clock pipeline incomplete — holistic fallback', 'warn');
+    // use Pass-1 result if available
+    if (directWinner !== null) {
+      const rDuration = Date.now() - rStart;
+      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 WIN -- tile [' + directWinner + '] confidence=' + directConfidence + '% in ' + rDuration + 'ms');
+      return { winningIndex: directWinner, raw: JSON.stringify({ directWinner, directConfidence }), durationMs: rDuration, targetDigit: -1, pass: 'rotation-direct' };
+    }
 
-    // fallback orientation comparison
+    // Pass 3: holistic fallback
+    ccLog(tabId, 'FUNCAPTCHA: ROT all passes failed -- holistic fallback', 'warn');
     const batchDescR = batchB64s.length === 1
       ? 'IMAGE 2: Candidate tiles [1] through [' + total + '].\n'
       : 'IMAGE 2: Candidate tiles [1] through [' + Math.ceil(total / 2) + '].\n' +
         'IMAGE 3: Candidate tiles [' + (Math.ceil(total / 2) + 1) + '] through [' + total + '].\n';
 
-    const fallbackText = 'This is an Arkose FunCAPTCHA ORIENTATION challenge.\n' +
-      'Task prompt: "' + (prompt || 'Rotate the object to match the shown direction') + '"\n\n' +
-      'IMAGE 1: TARGET reference — shows a hand/indicator direction.\n' +
-      'Candidates show the same object at different rotations.\n\n' +
-      batchDescR + '\n' +
-      'Find the ONE candidate where the object faces the SAME direction the hand points in Image 1.\n' +
+    const fallbackText = 'Arkose FunCAPTCHA ORIENTATION challenge.\n' +
+      'Prompt: "' + (prompt || 'Rotate the object to match the shown direction') + '"\n\n' +
+      'IMAGE 1: Hand indicator showing required direction.\n' +
+      batchDescR + '\n' + objectHint + '\n\n' +
+      'Find the ONE candidate where the object FRONT faces the same direction as the hand fingertips.\n' +
       'Conclude with:\nWINNING_INDEX: <number 1-' + total + '>\n{"winningIndex": <number 1-' + total + '>}';
 
     const contentR = [
@@ -1609,7 +1581,7 @@ async function solveFunCaptchaVision(tabId, msg) {
         messages: [
           {
             role: 'system',
-            content: 'You are an expert Arkose FunCAPTCHA solver for ORIENTATION challenges. Be extremely concise (max 2 sentences). You MUST conclude with:\nWINNING_INDEX: <integer 1-' + total + '>\n{"winningIndex": <integer 1-' + total + '>}'
+            content: 'Expert Arkose orientation solver. Be concise (max 2 sentences). Conclude with:\nWINNING_INDEX: <integer 1-' + total + '>\n{"winningIndex": <integer 1-' + total + '>}'
           },
           { role: 'user', content: contentR }
         ],
@@ -1618,7 +1590,7 @@ async function solveFunCaptchaVision(tabId, msg) {
       }, 25000);
 
       const rDuration = Date.now() - rStart;
-      ccLog(tabId, 'FUNCAPTCHA: orientation fallback reply (' + rDuration + 'ms): ' + String(rReply).trim());
+      ccLog(tabId, 'FUNCAPTCHA: ROT fallback reply (' + rDuration + 'ms): ' + String(rReply).trim());
 
       let rIndex = null;
       const rjm = String(rReply).replace(/```[a-z]*\n?/gi, '').match(/\{[\s\S]*?\}/);
@@ -1639,12 +1611,12 @@ async function solveFunCaptchaVision(tabId, msg) {
       }
 
       if (rIndex) {
-        ccLog(tabId, 'FUNCAPTCHA: ★★ ORIENTATION WIN (fallback) — tile [' + rIndex + '] in ' + rDuration + 'ms');
+        ccLog(tabId, 'FUNCAPTCHA: ROT fallback WIN -- tile [' + rIndex + '] in ' + rDuration + 'ms');
         return { winningIndex: rIndex, raw: rReply, durationMs: rDuration, targetDigit: -1, pass: 'orientation' };
       }
-      ccLog(tabId, 'FUNCAPTCHA: orientation parse failed — reply was: ' + String(rReply).trim().slice(0, 400), 'warn');
+      ccLog(tabId, 'FUNCAPTCHA: ROT fallback parse failed: ' + String(rReply).trim().slice(0, 400), 'warn');
     } catch (err) {
-      ccLog(tabId, 'FUNCAPTCHA: orientation solver error: ' + (err.message || err) + ' — falling back', 'warn');
+      ccLog(tabId, 'FUNCAPTCHA: ROT fallback error: ' + (err.message || err), 'warn');
     }
   }
 
