@@ -74,7 +74,9 @@ PROVIDER_KEYS.forEach((key) => {
   });
 });
 
-function render(state, settings, logs) {
+function render(state, settings, logs, recState) {
+  if (!state) return;
+  settings = settings || {};
   // render status box
   const dot = $('status-dot');
   const txt = $('status-text');
