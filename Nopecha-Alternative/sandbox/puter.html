@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /></head>
+<body>
+  <!-- puter.js loaded from CDN — eval is legal here via manifest sandbox CSP:
+       "sandbox": "sandbox allow-scripts; script-src 'self' https://js.puter.com/" -->
+  <script src="https://js.puter.com/v2/"></script>
+  <!-- sandbox-engine.js: handles window.postMessage from offscreen relay (approach A) -->
+  <script src="sandbox-engine.js"></script>
+  <!-- puter-bridge.js: handles chrome.runtime messages from service-worker tab approach (approach B).
+       NOTE: chrome.* is unavailable when this page is inside a sandboxed iframe.
+       When loaded as a tab directly (chrome.tabs.create), chrome.* IS available. -->
+</body>
+</html>

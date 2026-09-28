@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /></head>
+<body>
+  <!-- Sandbox iframe: hosts puter.js (needs eval) + sandbox-engine.js.
+       The 'sandbox' attribute (without allow-same-origin) forces the iframe into a
+       unique opaque origin with its own CSP — eval is implicitly allowed in sandboxed
+       iframes. This is how puter.js runs without triggering the offscreen CSP eval block.
+       IMPORTANT: do NOT add 'allow-same-origin' here — that would give the iframe access
+       to the extension origin and defeat the sandbox isolation. -->
+  <iframe
+    id="sbframe"
+    src="/sandbox/puter.html"
+    sandbox="allow-scripts"
+    style="display:none;width:1px;height:1px;position:absolute;top:-9999px"
+  ></iframe>
+  <!-- relay.js: bridges chrome.runtime messages (SW) <-> window.postMessage (sandbox iframe) -->
+  <script src="/offscreen/relay.js"></script>
+</body>
+</html>

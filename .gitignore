@@ -1,0 +1,9 @@
+Agents.md
+agents.md
+AGENTS.md
+scratch/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.log

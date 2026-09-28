@@ -1,0 +1,145 @@
+{
+  "manifest_version": 3,
+  "name": "CaptchaCrusher — reCAPTCHA Audio Solver",
+  "version": "1.1.0",
+  "description": "Fully automatic reCAPTCHA v2 audio solver + v3 token harvester. Clicks the checkbox, switches to audio, transcribes, submits, retries.",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "offscreen",
+    "debugger",
+    "tabCapture",
+    "downloads"
+  ],
+  "minimum_chrome_version": "109",
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts; script-src 'self' https://js.puter.com/ 'unsafe-eval'"
+  },
+  "host_permissions": [
+    "<all_urls>",
+    "https://api.xkiro.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/click-anim.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/page.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/text-captcha.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "https://www.google.com/recaptcha/*",
+        "https://recaptcha.google.com/*",
+        "https://www.recaptcha.net/recaptcha/*"
+      ],
+      "js": [
+        "content/frame.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/turnstile.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/geetest.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/funcaptcha.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "CaptchaCrusher",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "sandbox": {
+    "pages": [
+      "sandbox/puter.html"
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "lib/vosk/model.tar.gz",
+        "lib/vosk/vosk-worker.js",
+        "sandbox/*",
+        "offscreen/*",
+        "content/geetest-inject.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>CaptchaCrusher</h1>
+    <span id="detected-badge" class="badge none">scanning</span>
+  </header>
+
+  <!-- navigation tabs -->
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-tab="tab-dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="tab-providers">Providers</button>
+    <button class="tab-btn" data-tab="tab-settings">Settings</button>
+  </nav>
+
+  <!-- dashboard tab -->
+  <div id="tab-dashboard" class="tab-pane active">
+    <section id="status-box">
+      <div class="status-row">
+        <span id="status-dot" class="dot idle"></span>
+        <span id="status-text">idle</span>
+      </div>
+      <div id="attempt-info" class="muted"></div>
+
+      <!-- tab video recorder -->
+      <div class="record-bar">
+        <button type="button" id="btn-record" class="record-btn">
+          <span class="rec-dot"></span>
+          <span id="record-btn-text">Record</span>
+        </button>
+        <span id="record-timer" class="record-timer" style="display:none;">00:00</span>
+        <span id="record-status-note" class="record-note"></span>
+      </div>
+
+      <details id="log-box" open>
+        <summary style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
+          <span id="log-box-title">Activity Logs</span>
+          <span class="log-filter-group" onclick="event.stopPropagation()">
+            <button type="button" id="btn-filter-all" class="pill-btn active">All</button>
+            <button type="button" id="btn-filter-err" class="pill-btn">Errors</button>
+          </span>
+        </summary>
+        <pre id="logs"></pre>
+        <button id="btn-copylogs" class="ghost">Copy logs</button>
+      </details>
+    </section>
+  </div>
+
+  <!-- providers tab -->
+  <div id="tab-providers" class="tab-pane">
+    <div class="provider-list">
+      <!-- hCaptcha -->
+      <div class="provider-row" data-key="solve_hcaptcha">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-hcaptcha" />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00d1b2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
+              <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/>
+              <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/>
+              <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+            </svg>
+          </span>
+          <span class="provider-name">hCaptcha</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- reCAPTCHA -->
+      <div class="provider-row active" data-key="solve_recaptcha">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-recaptcha" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="22" height="22" viewBox="19.5 0 81.92 81.68">
+              <g>
+                <path fill="#1C3AA9" d="M101.42,40.78c0-0.59-0.02-1.17-0.04-1.75V5.88l-9.16,9.17C84.72,5.86,73.31,0,60.53,0 c-13.3,0-25.12,6.35-32.59,16.18l15.02,15.18c1.47-2.72,3.56-5.06,6.08-6.83c2.62-2.05,6.34-3.72,11.48-3.72 c0.62,0,1.1,0.07,1.45,0.21c6.37,0.5,11.89,4.02,15.14,9.12L66.48,40.77C79.95,40.72,95.17,40.69,101.42,40.78L101.42,40.78 L101.42,40.78z M101.42,40.78L101.42,40.78L101.42,40.78L101.42,40.78z"/>
+                <path fill="#4285F4" d="M60.29,0c-0.59,0-1.17,0.02-1.75,0.04H25.38l9.17,9.16C25.37,16.71,19.5,28.12,19.5,40.9 c0,13.3,6.35,25.12,16.18,32.59l15.18-15.02c-2.72-1.47-5.06-3.56-6.83-6.08c-2.05-2.62-3.72-6.34-3.72-11.48 c0-0.62,0.07-1.1,0.21-1.45c0.5-6.37,4.02-11.89,9.12-15.14l10.63,10.63C60.23,21.47,60.19,6.26,60.29,0L60.29,0L60.29,0z M60.29,0 L60.29,0L60.29,0L60.29,0z"/>
+                <path fill="#ABABAB" d="M19.51,40.9c0,0.59,0.02,1.17,0.04,1.75V75.8l9.16-9.16c7.5,9.18,18.91,15.04,31.69,15.04 c13.3,0,25.12-6.35,32.59-16.18L77.97,50.32c-1.47,2.72-3.56,5.06-6.08,6.83c-2.62,2.05-6.34,3.72-11.48,3.72 c-0.62,0-1.1-0.07-1.45-0.21c-6.37-0.5-11.89-4.02-15.14-9.12l10.63-10.63C40.98,40.96,25.76,40.99,19.51,40.9L19.51,40.9 L19.51,40.9z M19.51,40.9L19.51,40.9L19.51,40.9L19.51,40.9z"/>
+              </g>
+            </svg>
+          </span>
+          <span class="provider-name">reCAPTCHA</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- Cloudflare Turnstile -->
+      <div class="provider-row active" data-key="solve_turnstile">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-turnstile" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 40 40">
+              <path d="m19.98 2.95c-4.81 0-9.15 1.98-12.05 4.58l1.15-6.25-2.96-0.57-2.04 11.04 11.04 2.02 0.57-2.97-5.69-1.04c2.65-2.33 6.21-3.75 9.98-3.75 8.36 0 15.05 6.92 15.05 15.12 0 8.46-6.87 15.06-15.03 15.06-8.51 0-15.14-6.82-15.14-15.06 0-1.41 0.18-2.77 0.48-3.84l-2.93-0.77c-0.39 1.45-0.59 2.9-0.59 4.58 0 10.1 8.08 18.19 18.2 18.19 9.96 0 18.16-8.4 18.16-18.19 0-10.12-8.19-18.15-18.2-18.15z" fill="#F37F20"/>
+              <path d="m17.91 30.06 13.39-13.42-2.74-2.73-10.67 10.67-4.25-4.21-2.73 2.7 7 6.99z" fill="#F37F20"/>
+            </svg>
+          </span>
+          <span class="provider-name">Cloudflare Turnstile</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- FunCAPTCHA -->
+      <div class="provider-row active" data-key="solve_funcaptcha">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-funcaptcha" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+              <polyline points="9 22 9 12 15 12 15 22"/>
+            </svg>
+          </span>
+          <span class="provider-name">FunCAPTCHA</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- AWS CAPTCHA -->
+      <div class="provider-row" data-key="solve_awscaptcha">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-awscaptcha" />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a3e635" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+              <line x1="12" y1="22.08" x2="12" y2="12"/>
+            </svg>
+          </span>
+          <span class="provider-name">AWS CAPTCHA</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- Text CAPTCHA -->
+      <div class="provider-row active" data-key="solve_textcaptcha">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-textcaptcha" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon" style="font-weight:700;font-size:15px;color:#94a3b8;font-family:serif;">Aa</span>
+          <span class="provider-name">Text CAPTCHA</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- Human (PerimeterX) -->
+      <div class="provider-row" data-key="solve_human">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-human" />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon" style="font-weight:800;font-size:13px;color:#f43f5e;font-family:sans-serif;letter-spacing:-1px;">PX</span>
+          <span class="provider-name">Human (PerimeterX)</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- GeeTest -->
+      <div class="provider-row active" data-key="solve_geetest">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-geetest" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <circle cx="12" cy="12" r="3.5"/>
+              <line x1="5" y1="5" x2="8.5" y2="8.5"/>
+              <line x1="15.5" y1="15.5" x2="19" y2="19"/>
+            </svg>
+          </span>
+          <span class="provider-name">GeeTest</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+
+      <!-- Lemin CAPTCHA (beta) -->
+      <div class="provider-row" data-key="solve_lemin">
+        <label class="toggle-switch">
+          <input type="checkbox" id="provider-lemin" />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="provider-info">
+          <span class="provider-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="#eab308">
+              <path d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L12 12V3zm0 0v9l7.03 5.61C20.26 16.07 21 14.12 21 12c0-4.97-4.03-9-9-9z"/>
+            </svg>
+          </span>
+          <span class="provider-name">Lemin CAPTCHA (beta)</span>
+        </div>
+        <span class="chevron-arrow">&#8250;</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- settings tab -->
+  <div id="tab-settings" class="tab-pane">
+    <section class="settings">
+      <label class="field">
+        <span>Theme</span>
+        <select id="opt-theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="system">System (Auto)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Max attempts</span>
+        <input type="number" id="opt-maxattempts" min="1" max="15" value="6" />
+      </label>
+    </section>
+  </div>
+
+  <!-- solved counter footer -->
+  <footer>
+    <div class="solved-pill">
+      <svg class="solved-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+      </svg>
+      <span id="solved-count">0 captchas solved</span>
+    </div>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
