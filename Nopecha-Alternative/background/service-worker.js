@@ -1391,76 +1391,412 @@ async function solveFunCaptchaVision(tabId, msg) {
     (prompt || '').match(/select \w+ ([a-zA-Z]+)/i);
   const objName = objMatch ? objMatch[1].toLowerCase() : null;
 
-  // rotation challenge solver
+  // rotation challenge solver — 12-hour clock dial + master comparison sheet
   if (isRotateChallenge && batchB64s && batchB64s.length > 0) {
-    ccLog(tabId, 'FUNCAPTCHA: ROT direct-visual solver — ' + total + ' candidates in ' + batchB64s.length + ' batch(es)');
+    ccLog(tabId, 'FUNCAPTCHA: ROT 12-hour clock-dial solver — ' + total + ' candidates');
     const rStart = Date.now();
 
-    // object-type hint for front detection
-    const objectHint = (() => {
+    // base64 to ImageBitmap for OffscreenCanvas
+    async function b64ToBitmap(b64str) {
+      const raw = atob(b64str);
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      const blob = new Blob([arr], { type: 'image/jpeg' });
+      return createImageBitmap(blob);
+    }
+
+    // helper: convert canvas to base64 jpeg
+    async function canvasToB64(canvas, quality = 0.90) {
+      const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    // draw precise 12-hour clock dial onto any canvas 2d context
+    function drawClockDial(ctx, cx, cy, radius, isTarget = false) {
+      const outerR = radius;
+      const innerR = radius * 0.76;
+      const labelR = radius * 0.88;
+
+      // outer circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // inner guide circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 12 clock hour directions (1 to 12)
+      // in canvas: 12 o'clock = -90° (UP), 3 = 0° (RIGHT), 6 = +90° (DOWN), 9 = 180° (LEFT)
+      for (let h = 1; h <= 12; h++) {
+        const deg = (h * 30) - 90;
+        const rad = deg * Math.PI / 180;
+        const isCardinal = (h === 12 || h === 3 || h === 6 || h === 9);
+
+        // radial tick line
+        const rStartTick = isCardinal ? innerR * 0.7 : innerR;
+        ctx.beginPath();
+        ctx.moveTo(cx + rStartTick * Math.cos(rad), cy + rStartTick * Math.sin(rad));
+        ctx.lineTo(cx + outerR * Math.cos(rad), cy + outerR * Math.sin(rad));
+        ctx.strokeStyle = isCardinal ? 'rgba(56, 189, 248, 0.9)' : 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = isCardinal ? 2.5 : 1.2;
+        ctx.stroke();
+
+        // hour label badge
+        const lx = cx + labelR * Math.cos(rad);
+        const ly = cy + labelR * Math.sin(rad);
+
+        ctx.beginPath();
+        ctx.arc(lx, ly, isCardinal ? 16 : 13, 0, Math.PI * 2);
+        ctx.fillStyle = isCardinal ? 'rgba(15, 23, 42, 0.9)' : 'rgba(0, 0, 0, 0.75)';
+        ctx.fill();
+        ctx.strokeStyle = isCardinal ? '#38bdf8' : 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = isCardinal ? 2 : 1;
+        ctx.stroke();
+
+        ctx.fillStyle = isCardinal ? '#38bdf8' : '#ffffff';
+        ctx.font = isCardinal ? 'bold 15px sans-serif' : 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(h), lx, ly);
+      }
+
+      // cardinal text labels: UP, RIGHT, DOWN, LEFT
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // 12 (UP)
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText('UP', cx, cy - outerR - 10);
+      // 3 (RIGHT)
+      ctx.fillText('RIGHT', cx + outerR + 24, cy);
+      // 6 (DOWN)
+      ctx.fillText('DOWN', cx, cy + outerR + 10);
+      // 9 (LEFT)
+      ctx.fillText('LEFT', cx - outerR - 22, cy);
+
+      // center crosshair
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.fillStyle = isTarget ? '#f59e0b' : '#38bdf8';
+      ctx.fill();
+    }
+
+    // annotate single image with clock dial
+    async function annotateImageWithClock(b64, badgeText, isTarget = false) {
+      const bmp = await b64ToBitmap(b64);
+      const size = 460;
+      const oc = new OffscreenCanvas(size, size);
+      const ctx = oc.getContext('2d');
+
+      ctx.fillStyle = '#0a0f1d';
+      ctx.fillRect(0, 0, size, size);
+
+      const scale = Math.min((size - 70) / bmp.width, (size - 70) / bmp.height);
+      const dw = Math.round(bmp.width * scale);
+      const dh = Math.round(bmp.height * scale);
+      ctx.drawImage(bmp, (size - dw) / 2, (size - dh) / 2, dw, dh);
+
+      drawClockDial(ctx, size / 2, size / 2, (size - 70) / 2, isTarget);
+
+      // badge at top
+      ctx.fillStyle = isTarget ? 'rgba(245, 158, 11, 0.9)' : 'rgba(15, 23, 42, 0.9)';
+      ctx.fillRect(10, 8, isTarget ? 170 : 130, 28);
+      ctx.strokeStyle = isTarget ? '#fbbf24' : '#38bdf8';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(10, 8, isTarget ? 170 : 130, 28);
+
+      ctx.fillStyle = isTarget ? '#ffffff' : '#38bdf8';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badgeText, 18, 22);
+
+      return canvasToB64(oc, 0.92);
+    }
+
+    // create Master Comparison Board: Hand + All Candidates in ONE visual frame
+    async function buildMasterComparisonBoard(targetB64, candB64s) {
+      const numCands = candB64s.length;
+      const cols = numCands <= 6 ? 3 : 4;
+      const rows = Math.ceil(numCands / cols);
+
+      const targetBoxW = 380;
+      const targetBoxH = 380;
+      const candTileW = 280;
+      const candTileH = 280;
+      const headerH = 50;
+
+      const boardW = Math.max(targetBoxW + 40, cols * candTileW + 40);
+      const boardH = headerH + targetBoxH + (rows * candTileH) + 60;
+
+      const oc = new OffscreenCanvas(boardW, boardH);
+      const ctx = oc.getContext('2d');
+
+      // dark background
+      ctx.fillStyle = '#080d1a';
+      ctx.fillRect(0, 0, boardW, boardH);
+
+      // title banner
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, boardW, headerH);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('ARKOS FUNCAPTCHA: 3D ORIENTATION MASTER COMPARISON SHEET', boardW / 2, 25);
+
+      // Section 1: TARGET HAND
+      const handBmp = await b64ToBitmap(targetB64);
+      const handX = (boardW - targetBoxW) / 2;
+      const handY = headerH + 15;
+
+      ctx.fillStyle = '#111827';
+      ctx.fillRect(handX, handY, targetBoxW, targetBoxH);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(handX, handY, targetBoxW, targetBoxH);
+
+      const handScale = Math.min((targetBoxW - 60) / handBmp.width, (targetBoxH - 60) / handBmp.height);
+      const hdw = Math.round(handBmp.width * handScale);
+      const hdh = Math.round(handBmp.height * handScale);
+      ctx.drawImage(handBmp, handX + (targetBoxW - hdw) / 2, handY + (targetBoxH - hdh) / 2, hdw, hdh);
+
+      drawClockDial(ctx, handX + targetBoxW / 2, handY + targetBoxH / 2, (targetBoxW - 70) / 2, true);
+
+      // hand label badge
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(handX + 8, handY + 8, 220, 30);
+      ctx.fillStyle = '#000000';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('TARGET: HAND DIRECTION', handX + 16, handY + 23);
+
+      // Section 2: CANDIDATE TILES
+      const gridStartY = handY + targetBoxH + 30;
+
+      for (let i = 0; i < numCands; i++) {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        const tx = 20 + c * candTileW;
+        const ty = gridStartY + r * candTileH;
+
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(tx + 4, ty + 4, candTileW - 8, candTileH - 8);
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(tx + 4, ty + 4, candTileW - 8, candTileH - 8);
+
+        if (candB64s[i]) {
+          const cBmp = await b64ToBitmap(candB64s[i]);
+          const cScale = Math.min((candTileW - 50) / cBmp.width, (candTileH - 50) / cBmp.height);
+          const cdw = Math.round(cBmp.width * cScale);
+          const cdh = Math.round(cBmp.height * cScale);
+          ctx.drawImage(cBmp, tx + (candTileW - cdw) / 2, ty + (candTileH - cdh) / 2, cdw, cdh);
+        }
+
+        drawClockDial(ctx, tx + candTileW / 2, ty + candTileH / 2, (candTileW - 60) / 2, false);
+
+        // candidate badge
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+        ctx.fillRect(tx + 8, ty + 8, 120, 26);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(tx + 8, ty + 8, 120, 26);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('TILE [' + (i + 1) + ']', tx + 68, ty + 21);
+      }
+
+      return canvasToB64(oc, 0.90);
+    }
+
+    // structural clues per object type
+    const objectStructuralGuide = (() => {
       const p = (prompt || '').toLowerCase();
-      if (/car|vehicle|suv|truck|van|auto/.test(p)) return 'Vehicle: FRONT = hood/headlight end (NOT the trunk/rear).';
-      if (/lawn.?mow|mower/.test(p)) return 'Lawn mower: FRONT = blade-deck cutting end.';
-      if (/motor.?bike|motorcycle|bike/.test(p)) return 'Motorcycle: FRONT = headlight/front-wheel end.';
-      if (/plane|aircraft|jet/.test(p)) return 'Aircraft: FRONT = nose/cockpit end.';
-      if (/boat|ship/.test(p)) return 'Boat: FRONT = bow (pointed end).';
-      return 'Identify the FRONT of the 3D object (lights, sharp nose, cutting edge, etc).';
+      if (/forklift|fork.?lift/.test(p)) {
+        return 'OBJECT TYPE: FORKLIFT\n' +
+          '- The metal FORKS/PRONGS sticking out are the FRONT.\n' +
+          '- The counterweight and protective driver cage are the REAR.\n' +
+          '- Heading = the direction the forks point on the 12-hour clock.';
+      }
+      if (/car|vehicle|sedan|coupe|suv|automobile|wagon/.test(p)) {
+        return 'OBJECT TYPE: CAR / AUTOMOBILE\n' +
+          '- TIRES/WHEELS: 2 front tires (steer axle) and 2 rear tires.\n' +
+          '- FRONT: Headlights + front bumper + hood. Windshield slopes down toward the front.\n' +
+          '- REAR: Red taillights + rear window + trunk / exhaust pipe.\n' +
+          '- Heading = the direction the headlights/hood are facing on the 12-hour clock.';
+      }
+      if (/truck|pickup|lorry/.test(p)) {
+        return 'OBJECT TYPE: TRUCK\n' +
+          '- FRONT: Cab with windshield, headlights, and front grille.\n' +
+          '- REAR: Flatbed, cargo container, or tailgate.\n' +
+          '- Heading = the direction the cab/headlights face on the 12-hour clock.';
+      }
+      if (/van|minivan/.test(p)) {
+        return 'OBJECT TYPE: VAN\n' +
+          '- FRONT: Windshield, headlights, and engine hood.\n' +
+          '- REAR: Flat vertical rear cargo doors.\n' +
+          '- Heading = the direction the headlights face on the 12-hour clock.';
+      }
+      if (/motor.?bike|motorcycle|scooter/.test(p)) {
+        return 'OBJECT TYPE: MOTORCYCLE\n' +
+          '- FRONT: Handlebars, headlight, and front steer wheel.\n' +
+          '- REAR: Exhaust pipe and rear tail light.\n' +
+          '- Heading = direction front tire/headlight points on 12-hour clock.';
+      }
+      if (/aircraft|plane|jet|airplane/.test(p)) {
+        return 'OBJECT TYPE: AIRCRAFT\n' +
+          '- FRONT: Pointed nose cone and cockpit glass.\n' +
+          '- REAR: Tail fin / vertical stabilizer and engines.\n' +
+          '- Heading = direction nose points on 12-hour clock.';
+      }
+      if (/boat|ship|yacht/.test(p)) {
+        return 'OBJECT TYPE: BOAT\n' +
+          '- FRONT: Bow (pointed forward V-shape).\n' +
+          '- REAR: Stern (flat rear transom).\n' +
+          '- Heading = direction bow points on 12-hour clock.';
+      }
+      if (/lawn.?mow|mower/.test(p)) {
+        return 'OBJECT TYPE: LAWN MOWER\n' +
+          '- FRONT: Low cutting deck / blade intake.\n' +
+          '- REAR: Push handle / handlebars.\n' +
+          '- Heading = direction cutting deck points on 12-hour clock.';
+      }
+      if (/animal|horse|dog|cat|lion|tiger|elephant|bear|wolf|deer|cow|sheep/.test(p)) {
+        return 'OBJECT TYPE: ANIMAL\n' +
+          '- FRONT: Head, snout, ears, and face.\n' +
+          '- REAR: Tail and hindquarters.\n' +
+          '- Heading = direction the head/face is looking on 12-hour clock.';
+      }
+      return 'OBJECT TYPE: 3D MODEL\n' +
+        '- Locate the functional FRONT (headlights, front tires, forks, nose, face, windshield).\n' +
+        '- Heading = direction the front face points on the 12-hour clock.';
     })();
 
-    const batchDescDirect = batchB64s.length === 1
-      ? 'IMAGE 2: All ' + total + ' candidate tiles labelled [1] through [' + total + '].\n'
-      : 'IMAGE 2: Candidate tiles [1]-[' + Math.ceil(total / 2) + '].\n' +
-        'IMAGE 3: Candidate tiles [' + (Math.ceil(total / 2) + 1) + ']-[' + total + '].\n';
-
-    // Pass 1: direct visual comparison with confidence score
-    const directText =
-      'ARKOSE FUNCAPTCHA -- 3D ROTATION CHALLENGE\n\n' +
-      'IMAGE 1: Wooden hand indicator. FINGERTIPS show the REQUIRED direction.\n' +
-      '  Look at where extended fingers AIM, not the palm or wrist.\n\n' +
-      batchDescDirect + '\n' +
-      'Each tile shows the SAME 3D object rotated differently.\n' +
-      objectHint + '\n\n' +
-      'TASK: Which tile has the object FRONT facing the same direction as the fingertips?\n\n' +
-      'Step 1 -- Hand: Which compass direction do the fingertips point? (N/S/E/W/NE/NW/SE/SW)\n' +
-      'Step 2 -- Tiles: For each tile [1]-[' + total + '], which direction does the FRONT face?\n' +
-      'Step 3 -- Match: Which tile best matches the hand direction?\n' +
-      'Step 4 -- Confidence: How confident are you? (0-100%)\n\n' +
-      'Reply ONLY with this JSON:\n' +
-      '{"handDirection": "<compass>", "tileFacings": ["<t1>","<t2>",...], "winningIndex": <1-' + total + '>, "confidence": <0-100>}';
-
-    const directContent = [
-      { type: 'text', text: directText },
-      { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
-    ];
-    for (const b of batchB64s) directContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
-
-    let directWinner = null;
-    let directConfidence = 0;
+    // generate clock-dial annotated visuals
+    let masterBoardB64 = null;
+    let clockHandB64 = null;
+    const clockTileB64s = [];
 
     try {
-      const directReply = await chatReply({
+      clockHandB64 = await annotateImageWithClock(targetB64, 'TARGET: HAND', true);
+      const candInputs = (tileB64s && tileB64s.length >= total) ? tileB64s.slice(0, total) : [];
+
+      if (candInputs.length >= total) {
+        for (let i = 0; i < total; i++) {
+          const ann = await annotateImageWithClock(candInputs[i], 'TILE [' + (i + 1) + ']', false);
+          clockTileB64s.push(ann);
+        }
+        masterBoardB64 = await buildMasterComparisonBoard(targetB64, candInputs);
+        ccLog(tabId, 'FUNCAPTCHA: ROT Master Comparison Board generated with ' + total + ' tiles');
+      }
+    } catch (err) {
+      ccLog(tabId, 'FUNCAPTCHA: ROT visual clock generation error: ' + (err.message || err), 'warn');
+    }
+
+    // Pass 1: Master Visual Comparison with 12-Hour Clock Dial
+    const p1Instructions =
+      'TASK: Solve Arkose FunCAPTCHA 3D orientation puzzle.\n' +
+      'Prompt: "' + (prompt || 'Rotate the object to face in the direction of the hand') + '"\n\n' +
+      'REFERENCE: 12-HOUR CLOCK FACE OVERLAY:\n' +
+      '  12 = Straight UP (↑, 0° / 360°)\n' +
+      '   1 = Up-Right (30°)\n' +
+      '   2 = Up-Right (60°)\n' +
+      '   3 = Straight RIGHT (→, 90°)\n' +
+      '   4 = Down-Right (120°)\n' +
+      '   5 = Down-Right (150°)\n' +
+      '   6 = Straight DOWN (↓, 180°)\n' +
+      '   7 = Down-Left (210°)\n' +
+      '   8 = Down-Left (240°)\n' +
+      '   9 = Straight LEFT (←, 270°)\n' +
+      '  10 = Up-Left (300°)\n' +
+      '  11 = Up-Left (330°)\n\n' +
+      objectStructuralGuide + '\n\n' +
+      'STEP-BY-STEP SOLUTION:\n' +
+      '1. TARGET HAND: Trace from the wrist through knuckles to the extended fingertips. What clock hour is the hand pointing to?\n' +
+      '2. CANDIDATE TILES: For each tile [1] to [' + total + '], locate the FRONT (using tires, headlights, hood, forks, nose) and determine which clock hour it faces.\n' +
+      '3. WINNER: Choose the candidate whose FRONT faces the exact same clock hour as the target hand.\n\n' +
+      'Respond ONLY with valid JSON in this exact structure:\n' +
+      '{\n' +
+      '  "handClock": "<e.g. 3:00 or 12:00>",\n' +
+      '  "tileHeadings": {"1": "<hour>", "2": "<hour>", ...},\n' +
+      '  "winningIndex": <number 1-' + total + '>,\n' +
+      '  "confidence": <integer 0-100>,\n' +
+      '  "reasoning": "<1-2 concise sentences>"\n' +
+      '}';
+
+    const p1Content = [{ type: 'text', text: p1Instructions }];
+
+    if (masterBoardB64) {
+      // Primary: Master Comparison Board where hand + all candidates are in one visual frame
+      p1Content.push({
+        type: 'text',
+        text: 'IMAGE 1: MASTER COMPARISON BOARD (Top = Target Hand, Bottom Grid = Candidates [1] to [' + total + ']):'
+      });
+      p1Content.push({ type: 'image_url', image_url: { url: toDataUrl(masterBoardB64) } });
+    } else if (clockHandB64 && clockTileB64s.length > 0) {
+      // Fallback: Individual clock-annotated images
+      p1Content.push({ type: 'text', text: 'TARGET HAND with 12-hour clock overlay:' });
+      p1Content.push({ type: 'image_url', image_url: { url: toDataUrl(clockHandB64) } });
+      for (let i = 0; i < clockTileB64s.length; i++) {
+        p1Content.push({ type: 'text', text: 'Candidate Tile [' + (i + 1) + '] with 12-hour clock overlay:' });
+        p1Content.push({ type: 'image_url', image_url: { url: toDataUrl(clockTileB64s[i]) } });
+      }
+    } else {
+      // Raw batch fallback
+      p1Content.push({ type: 'image_url', image_url: { url: toDataUrl(targetB64) } });
+      for (const b of batchB64s) p1Content.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+    }
+
+    let winner = null;
+    let winnerConfidence = 0;
+    let winnerReasoning = '';
+
+    try {
+      const p1Reply = await chatReply({
+        model: rotPrimaryModel,
         messages: [
           {
             role: 'system',
-            content: 'You are a precise 3D orientation analyst. Analyze images carefully. Wrong answers are strictly prohibited. Reply ONLY with the specified JSON. No markdown, no extra text.'
+            content: 'You are an elite spatial alignment analyst. ' +
+              'Your job is to match the direction of the target hand with the front of the candidate object using the 12-hour clock dial. ' +
+              'Accurately identify vehicle features: tires (front axle vs rear axle), headlights vs red taillights, windshield vs rear window. ' +
+              'Wrong answers are STRICTLY PROHIBITED. Reply strictly in JSON format.'
           },
-          { role: 'user', content: directContent }
+          { role: 'user', content: p1Content }
         ],
         temperature: 0,
-        max_tokens: 200
-      }, 28000);
+        max_tokens: 450
+      }, 30000);
 
-      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 reply: ' + String(directReply).trim().slice(0, 200));
-      const djm = String(directReply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/);
-      if (djm) {
+      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 reply: ' + String(p1Reply).trim().slice(0, 320));
+      const jm = String(p1Reply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/);
+      if (jm) {
         try {
-          const dp = JSON.parse(djm[0]);
-          const wi = parseInt(dp.winningIndex !== undefined ? dp.winningIndex : dp.winning_index, 10);
-          const conf = parseInt(String(dp.confidence || '0'), 10);
+          const parsed = JSON.parse(jm[0]);
+          const wi = parseInt(parsed.winningIndex !== undefined ? parsed.winningIndex : parsed.winning_index, 10);
+          const conf = parseInt(String(parsed.confidence || '0'), 10);
           if (!isNaN(wi) && wi >= 1 && wi <= total) {
-            directWinner = wi;
-            directConfidence = isNaN(conf) ? 50 : conf;
-            ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 winner=[' + directWinner + '] confidence=' + directConfidence + '% hand=' + (dp.handDirection || '?'));
+            winner = wi;
+            winnerConfidence = isNaN(conf) ? 60 : conf;
+            winnerReasoning = parsed.reasoning || '';
+            ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 winner=[' + winner + '] hand=' + (parsed.handClock || '?') +
+              ' conf=' + winnerConfidence + '% note="' + winnerReasoning.slice(0, 100) + '"');
           }
         } catch {}
       }
@@ -1468,68 +1804,75 @@ async function solveFunCaptchaVision(tabId, msg) {
       ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 error: ' + (e.message || e), 'warn');
     }
 
-    // Pass 2: low-confidence chain-of-thought retry with individual tiles
-    if (directWinner !== null && directConfidence < 65) {
-      ccLog(tabId, 'FUNCAPTCHA: ROT confidence=' + directConfidence + '% < 65 -- Pass-2 chain-of-thought', 'warn');
+    // Pass 2: Deep Tire/Axle Chain-of-Thought verification if winner is null or confidence < 60%
+    if (winner === null || winnerConfidence < 60) {
+      ccLog(tabId, 'FUNCAPTCHA: ROT confidence < 60% (' + winnerConfidence + '%) — triggering Pass-2 Deep Structural Verification');
 
-      const cotText =
-        'ARKOSE FUNCAPTCHA -- ROTATION CHALLENGE (Deep Analysis)\n\n' +
-        'IMAGE 1: Wooden hand indicator.\n' +
-        'Remaining images: same 3D object in ' + total + ' different rotations, labelled [1]-[' + total + '].\n\n' +
-        objectHint + '\n\n' +
-        '-- ANALYSIS PROTOCOL (follow exactly, wrong answers forbidden) --\n\n' +
-        'A) HAND: Trace wrist -> index/middle fingertips. State exact compass direction + clock position.\n\n' +
-        'B) TILES: For each [1]-[' + total + '], state which compass direction the FRONT faces.\n' +
-        '   Format: [1]=NE, [2]=W, [3]=S ...\n\n' +
-        'C) MATCH: Which tile direction is closest to the hand direction? State your winner and why.\n\n' +
-        'D) VERIFY: Re-examine chosen tile vs hand one more time. Update if needed.\n\n' +
-        'Conclude with:\n' +
-        'FINAL_ANSWER: {"winningIndex": <1-' + total + '>, "confidence": <0-100>}';
+      const p2Instructions =
+        'DEEP STRUCTURAL VERIFICATION — 12-HOUR CLOCK DIAL\n\n' +
+        'CRITICAL RULE: Hallucinations and wrong answers are STRICTLY FORBIDDEN.\n' +
+        'Double check the exact orientation of every single tile.\n\n' +
+        objectStructuralGuide + '\n\n' +
+        'DETAILED AUDIT PROTOCOL:\n' +
+        '1. TARGET HAND:\n' +
+        '   - Wrist position -> Palm -> Knuckles -> Extended Fingertips vector.\n' +
+        '   - Exactly which clock hour (1 to 12) do the fingertips point to?\n\n' +
+        '2. VEHICLE TIRES & FRONT INSPECTION (Tile by Tile):\n' +
+        '   - For each tile [1] to [' + total + ']:\n' +
+        '     * Identify the 4 tires on the ground plane.\n' +
+        '     * Identify which end has the FRONT bumper/headlights vs REAR tail lights.\n' +
+        '     * Which clock hour (1 to 12) is the FRONT pointing towards?\n\n' +
+        '3. ELIMINATION & VERIFICATION:\n' +
+        '   - Rule out candidates pointing in opposite or wrong directions.\n' +
+        '   - Confirm the single best match.\n\n' +
+        'FINAL_ANSWER: {"winningIndex": <1-' + total + '>, "handClock": "<hour>", "matchedClock": "<hour>", "confidence": <integer 0-100>, "explanation": "<reason>"}\n';
 
-      const cotContent = [
-        { type: 'text', text: cotText },
-        { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
-      ];
-      // individual tiles at full resolution
-      if (tileB64s && tileB64s.length > 0) {
-        for (let t = 0; t < Math.min(tileB64s.length, total); t++) {
-          if (tileB64s[t]) {
-            cotContent.push({ type: 'text', text: 'Tile [' + (t + 1) + ']:' });
-            cotContent.push({ type: 'image_url', image_url: { url: toDataUrl(tileB64s[t]) } });
-          }
-        }
-      } else {
-        for (const b of batchB64s) cotContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+      const p2Content = [{ type: 'text', text: p2Instructions }];
+
+      if (masterBoardB64) {
+        p2Content.push({ type: 'image_url', image_url: { url: toDataUrl(masterBoardB64) } });
+      }
+      if (clockHandB64) {
+        p2Content.push({ type: 'text', text: 'Target Hand Detail:' });
+        p2Content.push({ type: 'image_url', image_url: { url: toDataUrl(clockHandB64) } });
+      }
+      for (let i = 0; i < clockTileB64s.length; i++) {
+        p2Content.push({ type: 'text', text: 'Tile [' + (i + 1) + '] Detail:' });
+        p2Content.push({ type: 'image_url', image_url: { url: toDataUrl(clockTileB64s[i]) } });
       }
 
       try {
-        const cotReply = await chatReply({
+        const p2Reply = await chatReply({
+          model: rotPrimaryModel,
           messages: [
             {
               role: 'system',
-              content: 'You are an expert orientation analyst. Think carefully. Hallucinations and wrong answers are strictly forbidden. Follow the analysis protocol exactly.'
+              content: 'You are a meticulous forensic 3D computer vision engine. ' +
+                'Perform deep mathematical and spatial analysis on tires, headlights, and body geometry. ' +
+                'Provide thorough reasoning, then conclude with the exact FINAL_ANSWER JSON.'
             },
-            { role: 'user', content: cotContent }
+            { role: 'user', content: p2Content }
           ],
           temperature: 0,
-          max_tokens: 600
-        }, 35000);
+          max_tokens: 800
+        }, 40000);
 
-        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 CoT: ' + String(cotReply).trim().slice(0, 300));
-        const faM = String(cotReply).match(/FINAL_ANSWER\s*:\s*(\{[\s\S]*?\})/i);
+        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 CoT: ' + String(p2Reply).trim().slice(0, 360));
+        const faM = String(p2Reply).match(/FINAL_ANSWER\s*:\s*(\{[\s\S]*?\})/i);
         if (faM) {
           try {
             const fap = JSON.parse(faM[1]);
             const wi = parseInt(fap.winningIndex !== undefined ? fap.winningIndex : fap.winning_index, 10);
             if (!isNaN(wi) && wi >= 1 && wi <= total) {
               const rDuration = Date.now() - rStart;
-              ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 CoT WIN -- tile [' + wi + '] confidence=' + (fap.confidence || '?') + '% in ' + rDuration + 'ms');
-              return { winningIndex: wi, raw: String(cotReply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-cot' };
+              ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 WIN — tile [' + wi + '] conf=' + (fap.confidence || '?') + '% in ' + rDuration + 'ms');
+              return { winningIndex: wi, raw: String(p2Reply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-clock-cot' };
             }
           } catch {}
         }
-        // fallback: parse any JSON from response
-        const fbMs = String(cotReply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/g);
+
+        // fallback JSON parse
+        const fbMs = String(p2Reply).replace(/```[a-z]*/gi, '').match(/\{[\s\S]*?\}/g);
         if (fbMs) {
           for (const m of [...fbMs].reverse()) {
             try {
@@ -1537,63 +1880,58 @@ async function solveFunCaptchaVision(tabId, msg) {
               const wi = parseInt(fp.winningIndex !== undefined ? fp.winningIndex : fp.winning_index, 10);
               if (!isNaN(wi) && wi >= 1 && wi <= total) {
                 const rDuration = Date.now() - rStart;
-                ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 JSON WIN -- tile [' + wi + '] in ' + rDuration + 'ms');
-                return { winningIndex: wi, raw: String(cotReply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-cot-json' };
+                ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 JSON WIN — tile [' + wi + '] in ' + rDuration + 'ms');
+                return { winningIndex: wi, raw: String(p2Reply).trim(), durationMs: rDuration, targetDigit: -1, pass: 'rotation-clock-cot-json' };
               }
             } catch {}
           }
         }
-        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 no parse -- keeping Pass-1', 'warn');
+        ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 no parse — using Pass-1', 'warn');
       } catch (ce) {
         ccLog(tabId, 'FUNCAPTCHA: ROT Pass-2 error: ' + (ce.message || ce), 'warn');
       }
     }
 
     // use Pass-1 result if available
-    if (directWinner !== null) {
+    if (winner !== null) {
       const rDuration = Date.now() - rStart;
-      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 WIN -- tile [' + directWinner + '] confidence=' + directConfidence + '% in ' + rDuration + 'ms');
-      return { winningIndex: directWinner, raw: JSON.stringify({ directWinner, directConfidence }), durationMs: rDuration, targetDigit: -1, pass: 'rotation-direct' };
+      ccLog(tabId, 'FUNCAPTCHA: ROT Pass-1 WIN — tile [' + winner + '] conf=' + winnerConfidence + '% in ' + rDuration + 'ms');
+      return { winningIndex: winner, raw: JSON.stringify({ winner, winnerConfidence, winnerReasoning }), durationMs: rDuration, targetDigit: -1, pass: 'rotation-clock-direct' };
     }
 
-    // Pass 3: holistic fallback
-    ccLog(tabId, 'FUNCAPTCHA: ROT all passes failed -- holistic fallback', 'warn');
-    const batchDescR = batchB64s.length === 1
-      ? 'IMAGE 2: Candidate tiles [1] through [' + total + '].\n'
-      : 'IMAGE 2: Candidate tiles [1] through [' + Math.ceil(total / 2) + '].\n' +
-        'IMAGE 3: Candidate tiles [' + (Math.ceil(total / 2) + 1) + '] through [' + total + '].\n';
+    // Pass 3: last-resort fallback with raw candidate batches
+    ccLog(tabId, 'FUNCAPTCHA: ROT all passes failed — raw fallback', 'warn');
+    const fbText =
+      'Arkose FunCAPTCHA rotation challenge.\n' +
+      'Prompt: "' + (prompt || 'Rotate object to match hand direction') + '"\n\n' +
+      'IMAGE 1: Target hand pointing in a direction.\n' +
+      'Remaining images: ' + total + ' rotated views of the object.\n\n' +
+      objectStructuralGuide + '\n\n' +
+      'Find which rotation has the object FRONT facing the SAME direction as the hand fingertips.\n' +
+      'Conclude with: {"winningIndex": <1-' + total + '>}';
 
-    const fallbackText = 'Arkose FunCAPTCHA ORIENTATION challenge.\n' +
-      'Prompt: "' + (prompt || 'Rotate the object to match the shown direction') + '"\n\n' +
-      'IMAGE 1: Hand indicator showing required direction.\n' +
-      batchDescR + '\n' + objectHint + '\n\n' +
-      'Find the ONE candidate where the object FRONT faces the same direction as the hand fingertips.\n' +
-      'Conclude with:\nWINNING_INDEX: <number 1-' + total + '>\n{"winningIndex": <number 1-' + total + '>}';
-
-    const contentR = [
-      { type: 'text', text: fallbackText },
+    const fbContent = [
+      { type: 'text', text: fbText },
       { type: 'image_url', image_url: { url: toDataUrl(targetB64) } }
     ];
-    for (const b of batchB64s) contentR.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
+    for (const b of batchB64s) fbContent.push({ type: 'image_url', image_url: { url: toDataUrl(b) } });
 
     try {
-      const rReply = await chatReply({
+      const fbReply = await chatReply({
+        model: rotPrimaryModel,
         messages: [
-          {
-            role: 'system',
-            content: 'Expert Arkose orientation solver. Be concise (max 2 sentences). Conclude with:\nWINNING_INDEX: <integer 1-' + total + '>\n{"winningIndex": <integer 1-' + total + '>}'
-          },
-          { role: 'user', content: contentR }
+          { role: 'system', content: 'Expert orientation solver. Be concise. Reply with JSON: {"winningIndex": <integer 1-' + total + '>}' },
+          { role: 'user', content: fbContent }
         ],
         temperature: 0,
-        max_tokens: 500
+        max_tokens: 300
       }, 25000);
 
       const rDuration = Date.now() - rStart;
-      ccLog(tabId, 'FUNCAPTCHA: ROT fallback reply (' + rDuration + 'ms): ' + String(rReply).trim());
+      ccLog(tabId, 'FUNCAPTCHA: ROT fallback reply (' + rDuration + 'ms): ' + String(fbReply).trim().slice(0, 300));
 
       let rIndex = null;
-      const rjm = String(rReply).replace(/```[a-z]*\n?/gi, '').match(/\{[\s\S]*?\}/);
+      const rjm = String(fbReply).replace(/```[a-z]*\n?/gi, '').match(/\{[\s\S]*?\}/);
       if (rjm) {
         try {
           const parsed = JSON.parse(rjm[0]);
@@ -1603,7 +1941,7 @@ async function solveFunCaptchaVision(tabId, msg) {
         } catch {}
       }
       if (!rIndex) {
-        const m = String(rReply).match(/WINNING_INDEX:\s*(\d+)/i) || String(rReply).match(/winningIndex"?\s*[:=]\s*(\d+)/i);
+        const m = String(fbReply).match(/WINNING_INDEX:\s*(\d+)/i) || String(fbReply).match(/winningIndex"?\s*[:=]\s*(\d+)/i);
         if (m) {
           const wi = parseInt(m[1], 10);
           if (!isNaN(wi) && wi >= 1 && wi <= total) rIndex = wi;
@@ -1611,15 +1949,14 @@ async function solveFunCaptchaVision(tabId, msg) {
       }
 
       if (rIndex) {
-        ccLog(tabId, 'FUNCAPTCHA: ROT fallback WIN -- tile [' + rIndex + '] in ' + rDuration + 'ms');
-        return { winningIndex: rIndex, raw: rReply, durationMs: rDuration, targetDigit: -1, pass: 'orientation' };
+        ccLog(tabId, 'FUNCAPTCHA: ROT fallback WIN — tile [' + rIndex + '] in ' + rDuration + 'ms');
+        return { winningIndex: rIndex, raw: fbReply, durationMs: rDuration, targetDigit: -1, pass: 'rotation-fallback' };
       }
-      ccLog(tabId, 'FUNCAPTCHA: ROT fallback parse failed: ' + String(rReply).trim().slice(0, 400), 'warn');
+      ccLog(tabId, 'FUNCAPTCHA: ROT fallback parse failed', 'warn');
     } catch (err) {
       ccLog(tabId, 'FUNCAPTCHA: ROT fallback error: ' + (err.message || err), 'warn');
     }
   }
-
   // visual grid solver
   // cached target digit
   let targetDigit = -1;
