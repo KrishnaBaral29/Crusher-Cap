@@ -1313,7 +1313,7 @@ async function solveFunCaptchaVision(tabId, msg) {
   const primaryModel = settings.visionModel || 'qwen/qwen3.8-omni-flash:free';
   const fallbackModel = 'qwen/qwen3.8-max:free';
   const rotPrimaryModel = (settings.rotationModel || primaryModel);
-  const rotFallbackModel = 'qwen/qwen3-vl-plus:free';
+  const rotFallbackModel = 'qwen/qwen3.8-max:free';
   const total = candidateCount || 8;
 
   ccLog(tabId, 'FUNCAPTCHA: ★ Solver engine — "' + (prompt || '').slice(0, 60) + '" [' + total + ' tiles] batches=' + (batchB64s ? batchB64s.length : 0));
