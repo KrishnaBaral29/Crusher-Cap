@@ -1665,17 +1665,16 @@ async function solveFunCaptchaVision(tabId, msg) {
       return canvasToB64(oc, 0.90);
     }
 
-    // universal structural rules for identifying object front vs rear
+    // universal structural anchor rules — no captcha/brand framing, clinical scene language
     const universalRules =
-      'CRITICAL RULES FOR IDENTIFYING THE FRONT OF THE 3D OBJECT:\n' +
-      '- FORMULA 1 / RACECAR: FRONT has the pointed nose cone and front wing between the front wheels. REAR has the elevated rear spoiler wing.\n' +
-      '- SEDAN / CAR / SUV: FRONT has the hood, headlights, and front bumper. Windshield slopes towards the front. REAR has the trunk and red tail lights.\n' +
-      '- FORKLIFT: FRONT has the two protruding metal forks. REAR has the engine block and counterweight.\n' +
-      '- LAWN MOWER: FRONT is the cutting deck. REAR has the tall push handle.\n' +
-      '- TRUCK / VAN: FRONT has the cab, front windshield, and grille. REAR has the cargo doors or flatbed.\n' +
-      '- AIRCRAFT / JET: FRONT has the pointed nose cone and cockpit. REAR has the vertical stabilizer tail.\n' +
-      '- ANIMAL / PET: FRONT is the head, snout, and face. REAR is the tail.\n' +
-      '- The object is FACING the direction its FRONT points on the 12-hour clock dial.';
+      'OBJECT ANATOMY REFERENCE — USE THESE VISUAL ANCHORS TO LOCATE THE FRONT:\n' +
+      '• Sports car / Formula racer: front = narrow pointed nose, splitter plate at ground level, front wing. Rear = wide diffuser, raised spoiler wing above roofline.\n' +
+      '• Sedan / SUV / Hatchback: front = flat hood, rectangular headlights left and right of grille, smooth bumper. Rear = sloping trunk/tailgate, round red/orange tail-lights.\n' +
+      '• Pickup truck / Van: front = tall cab, vertical windshield, large side mirrors on A-pillars. Rear = cargo bed or cargo doors, no windows.\n' +
+      '• Forklift: front = two horizontal metal forks protruding forward at ground level. Rear = large engine block counterweight cylinder.\n' +
+      '• Aircraft / Jet: front = sharp tapered nose cone, cockpit glass bubble. Rear = tall vertical fin (stabilizer), exhaust nozzles.\n' +
+      '• Animal / creature: front = eyes, snout, mouth, face. Rear = tail.\n' +
+      'The FACING DIRECTION of the object equals the compass direction its front anatomical feature points toward.';
 
     // generate clock-dial annotated visuals
     let masterBoardB64 = null;
@@ -1698,22 +1697,30 @@ async function solveFunCaptchaVision(tabId, msg) {
       ccLog(tabId, 'FUNCAPTCHA: ROT visual clock generation error: ' + (err.message || err), 'warn');
     }
 
-    // Pass 1: Razor-focused direct identification
+    // Pass 1 — CoT scene analysis, no captcha/brand framing
     const p1Instructions =
-      'Arkose FunCAPTCHA 3D Orientation Puzzle.\n' +
-      'Prompt: "' + (prompt || 'Rotate the object to face in the direction of the hand') + '"\n\n' +
-      '12-HOUR CLOCK FACE REFERENCE (overlaid on all images):\n' +
-      '  12 = UP (↑, 0°)\n' +
-      '   3 = RIGHT (→, 90°)\n' +
-      '   6 = DOWN (↓, 180°)\n' +
-      '   9 = LEFT (←, 270°)\n\n' +
+      'You are a precision scene analysis engine performing a 3D orientation matching task.\n\n' +
+      'CLOCK COORDINATE SYSTEM (printed on all images):\n' +
+      '  12 o\u2019clock = straight up  (↑)\n' +
+      '   3 o\u2019clock = right        (→)\n' +
+      '   6 o\u2019clock = straight down (↓)\n' +
+      '   9 o\u2019clock = left         (←)\n\n' +
       universalRules + '\n\n' +
-      'TASK:\n' +
-      '1. TARGET (top): Find the direction the hand fingertips are pointing on the 12-hour clock.\n' +
-      '2. CANDIDATES (bottom grid): Find which tile [1] to [' + total + '] has the FRONT of the object pointing in the EXACT SAME direction as the hand.\n\n' +
-      'Reply in this exact format:\n' +
-      'WINNING_INDEX: <integer 1-' + total + '>\n' +
-      '{"winningIndex": <integer 1-' + total + '>, "confidence": <integer 0-100>, "reasoning": "<1 concise sentence>"}';
+      'SCENE LAYOUT:\n' +
+      '  TOP section   → REFERENCE IMAGE: a human hand with an extended index finger (or pointing gesture).\n' +
+      '  BOTTOM GRID   → ' + total + ' candidate images labeled [1] through [' + total + '], each showing the same 3D object at a different rotation.\n\n' +
+      'YOUR TASK — reason step by step:\n' +
+      'STEP 1 — HAND DIRECTION: Examine the reference hand. Trace from the wrist toward the fingertip. Find the clock hour that the fingertip points toward. Write it down.\n' +
+      'STEP 2 — OBJECT ANATOMY: Identify what type of object is shown in the candidate tiles. Identify its front anatomical feature (nose cone, headlights, face, forks, etc.) using the anatomy reference above.\n' +
+      'STEP 3 — CANDIDATE SCAN: For each tile [1]–[' + total + '], locate the front feature and find which clock hour it points toward.\n' +
+      'STEP 4 — MATCH: Select the tile whose front feature clock-hour EXACTLY matches the hand fingertip clock-hour from Step 1.\n\n' +
+      'OUTPUT FORMAT (mandatory, no extra text after):\n' +
+      'STEP 1: Hand fingertip points to clock hour [X]\n' +
+      'STEP 2: Object type is [Y], front feature is [Z]\n' +
+      'STEP 3: Tile directions → [list each tile and its clock hour]\n' +
+      'STEP 4: Best match is tile [N]\n' +
+      'WINNING_INDEX: N\n' +
+      '{"winningIndex": N, "confidence": 0-100, "reasoning": "one sentence"}';
 
     const p1Content = [{ type: 'text', text: p1Instructions }];
 
@@ -1745,10 +1752,12 @@ async function solveFunCaptchaVision(tabId, msg) {
         messages: [
           {
             role: 'system',
-            content: 'You are an elite spatial alignment analyst. ' +
-              'Your job is to match the direction of the target hand fingertips with the front of the candidate object. ' +
-              'Identify the vehicle front: headlights, front wheels, hood, or racecar nose cone. ' +
-              'Wrong answers are STRICTLY FORBIDDEN.'
+            content: 'You are a 3D spatial scene analysis engine. ' +
+              'You analyze images to determine object orientation and directional matching. ' +
+              'You always reason step-by-step: first identify the reference direction from the hand, ' +
+              'then identify the object type and its front anatomy, ' +
+              'then compare each candidate tile systematically before selecting the best match. ' +
+              'You are methodical, visual, and precise. You never guess.'
           },
           { role: 'user', content: p1Content }
         ],
@@ -1775,13 +1784,23 @@ async function solveFunCaptchaVision(tabId, msg) {
       ccLog(tabId, 'FUNCAPTCHA: ROT conf=' + winnerConfidence + '% — Pass-2 verification with fallback model');
 
       const p2Instructions =
-        'DEEP SPATIAL VERIFICATION — ARKOSE 3D ROTATION\n\n' +
+        'SCENE RE-AUDIT — directional orientation matching task.\n\n' +
+        'A previous analysis pass was inconclusive. Perform a fresh, independent deep analysis.\n\n' +
         universalRules + '\n\n' +
-        '1. Look at the TARGET HAND. Which clock hour (1 to 12) do the fingertips point to?\n' +
-        '2. Look at each candidate tile [1] to [' + total + ']. Locate the FRONT end (hood/headlights/nose) and find which tile faces the SAME clock hour.\n\n' +
-        'Reply immediately with:\n' +
-        'WINNING_INDEX: <integer 1-' + total + '>\n' +
-        '{"winningIndex": <integer 1-' + total + '>, "confidence": <integer 0-100>}';
+        'IMAGE LAYOUT: top = reference hand, bottom grid = ' + total + ' candidate tiles [1]–[' + total + '].\n\n' +
+        'MANDATORY REASONING CHAIN:\n' +
+        'A) HAND CLOCK HOUR: Look at the hand image. Draw an imaginary line from the palm through the extended fingertip. ' +
+        'Which clock-face number (1–12) does that line intersect on the outer ring? State it explicitly.\n' +
+        'B) OBJECT FRONT: Name the object visible in the tiles. Cite the specific front feature you will use as your directional anchor (e.g., "headlights", "nose cone", "face").\n' +
+        'C) TILE-BY-TILE AUDIT: For every tile from [1] to [' + total + '], state which clock hour its front feature points toward. Do not skip any tile.\n' +
+        'D) SELECT MATCH: Choose the single tile whose front-feature clock hour equals the hand clock hour from step A.\n\n' +
+        'RESPOND IN THIS FORMAT ONLY:\n' +
+        'A) Hand clock hour: [N]\n' +
+        'B) Object: [type], front anchor: [feature]\n' +
+        'C) Tile audit: [1]→[hour], [2]→[hour], ... [' + total + ']→[hour]\n' +
+        'D) Match: tile [N]\n' +
+        'WINNING_INDEX: N\n' +
+        '{"winningIndex": N, "confidence": 0-100}';
 
       const p2Content = [{ type: 'text', text: p2Instructions }];
       if (masterBoardB64) {
@@ -1797,7 +1816,13 @@ async function solveFunCaptchaVision(tabId, msg) {
           messages: [
             {
               role: 'system',
-              content: 'High-precision computer vision engine. Match hand direction with object front. Reply with WINNING_INDEX and JSON.'
+              content: 'You are a senior 3D orientation auditor performing a scene re-analysis. ' +
+                'You follow a strict A→B→C→D reasoning chain: ' +
+                '(A) identify hand direction from palm-to-fingertip line, ' +
+                '(B) identify the object and its front anatomical feature, ' +
+                '(C) audit every candidate tile clock direction individually, ' +
+                '(D) select the exact matching tile. ' +
+                'You never skip steps and never guess. Your output is deterministic and verifiable.'
             },
             { role: 'user', content: p2Content }
           ],
