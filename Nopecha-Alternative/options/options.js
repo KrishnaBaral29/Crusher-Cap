@@ -19,6 +19,7 @@ const DEFAULTS = {
   visionApiKey: 'sk-xt-1f08ad192f4cfc85e0d9f9568c951e7922ce8ec4b12fe127',
   visionModel: 'qwen/qwen3.8-omni-flash:free',
   visionBaseUrl: 'https://api.xkiro.com/v1',
+  geminiApiKey: '', // Google Gemini API key
   maxAttempts: 6,
   minDelay: 1200,
   maxDelay: 3000,
@@ -40,6 +41,7 @@ const FIELD_KEYS = [
   'visionApiKey',
   'visionModel',
   'visionBaseUrl',
+  'geminiApiKey',
   'provider',
   'maxAttempts',
   'minDelay',

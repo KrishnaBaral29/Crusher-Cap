@@ -4,11 +4,12 @@ const DEFAULTS = {
   enabled: true,
   autoSolve: true,
   autoClick: true,
-  solverMode: 'image', // 'image' = image solver first with audio fallback, 'audio' = audio only, 'image_only' = image only
+  solverMode: 'image',
   provider: 'google',
   visionApiKey: 'sk-xt-1f08ad192f4cfc85e0d9f9568c951e7922ce8ec4b12fe127',
   visionModel: 'qwen/qwen3.8-omni-flash:free',
   visionBaseUrl: 'https://api.xkiro.com/v1',
+  geminiApiKey: '', // Google Gemini API key (from aistudio.google.com/apikey)
   maxAttempts: 6,
   minDelay: 1200,
   maxDelay: 3000,
@@ -1308,15 +1309,18 @@ async function solveFunCaptchaVision(tabId, msg) {
   const { prompt, imageB64, candidateCount, targetB64, batchB64s, tileB64s, challengeType } = msg;
   const apiKey = settings.visionApiKey || settings.apiKey || '';
   const baseUrl = (settings.visionBaseUrl || 'https://api.xkiro.com/v1').replace(/\/+$/, '');
+  const geminiApiKey = settings.geminiApiKey || '';
+  const hasGemini = !!geminiApiKey;
 
   // vision model chains
   const primaryModel = settings.visionModel || 'qwen/qwen3.8-omni-flash:free';
   const fallbackModel = 'qwen/qwen3.8-max:free';
-  const rotPrimaryModel = (settings.rotationModel || primaryModel);
-  const rotFallbackModel = 'qwen/qwen3-vl-plus:free';
+  // rotation uses gemini-3.8-flash when key is available, otherwise qwen
+  const rotPrimaryModel = hasGemini ? 'gemini-3.8-flash' : (settings.rotationModel || primaryModel);
+  const rotFallbackModel = hasGemini ? 'gemini-3.8-flash' : 'qwen/qwen3-vl-plus:free';
   const total = candidateCount || 8;
 
-  ccLog(tabId, 'FUNCAPTCHA: ★ Solver engine — "' + (prompt || '').slice(0, 60) + '" [' + total + ' tiles] batches=' + (batchB64s ? batchB64s.length : 0));
+  ccLog(tabId, 'FUNCAPTCHA: ★ Solver engine — "' + (prompt || '').slice(0, 60) + '" [' + total + ' tiles] batches=' + (batchB64s ? batchB64s.length : 0) + (hasGemini ? ' [GEMINI]' : ' [QWEN]'));
 
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) { headers['Authorization'] = 'Bearer ' + apiKey; headers['x-api-key'] = apiKey; }
@@ -1369,6 +1373,11 @@ async function solveFunCaptchaVision(tabId, msg) {
   }
 
   async function chatReply(payload, timeoutMs = 25000) {
+    // Route through Gemini native API when a Gemini key is set and the model is a gemini-* model
+    const model = payload.model || '';
+    if (hasGemini && model.startsWith('gemini-')) {
+      return geminiChatReply(payload, timeoutMs);
+    }
     const resp = await postChat(payload, timeoutMs);
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
@@ -1376,6 +1385,81 @@ async function solveFunCaptchaVision(tabId, msg) {
     }
     const data = await resp.json();
     return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+  }
+
+  // ── Native Google Gemini API (generativelanguage.googleapis.com) ──────────
+  // Converts OpenAI-style message array → Gemini contents format, then extracts reply text
+  async function geminiChatReply(payload, timeoutMs = 30000) {
+    const gModel = payload.model || 'gemini-3.8-flash';
+    const gemUrl = 'https://generativelanguage.googleapis.com/v1beta/models/' + gModel + ':generateContent?key=' + geminiApiKey;
+
+    // build Gemini contents array from OpenAI messages
+    const gemContents = [];
+    let systemText = '';
+    for (const msg of (payload.messages || [])) {
+      if (msg.role === 'system') {
+        systemText = (typeof msg.content === 'string') ? msg.content : '';
+        continue;
+      }
+      const role = msg.role === 'assistant' ? 'model' : 'user';
+      let parts = [];
+
+      if (typeof msg.content === 'string') {
+        parts = [{ text: (systemText ? systemText + '\n\n' : '') + msg.content }];
+        systemText = ''; // consumed
+      } else if (Array.isArray(msg.content)) {
+        // prepend system text to first text part
+        let systemInjected = false;
+        for (const part of msg.content) {
+          if (part.type === 'text') {
+            const txt = systemText && !systemInjected
+              ? systemText + '\n\n' + part.text
+              : part.text;
+            systemInjected = true;
+            systemText = '';
+            parts.push({ text: txt });
+          } else if (part.type === 'image_url') {
+            // decode data URL → inlineData
+            const dataUrl = (part.image_url && part.image_url.url) || '';
+            const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
+            if (match) {
+              parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            }
+          }
+        }
+        if (systemText) { parts.unshift({ text: systemText }); systemText = ''; }
+      }
+
+      if (parts.length > 0) gemContents.push({ role, parts });
+    }
+
+    const gemPayload = {
+      contents: gemContents,
+      generationConfig: {
+        temperature: payload.temperature !== undefined ? payload.temperature : 0,
+        maxOutputTokens: payload.max_tokens || 400,
+        responseMimeType: 'text/plain'
+      }
+    };
+
+    const resp = await fetch(gemUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(gemPayload)
+    });
+
+    if (!resp.ok) {
+      const errTxt = await resp.text().catch(() => '');
+      throw new Error('Gemini API HTTP ' + resp.status + ': ' + errTxt.slice(0, 160));
+    }
+
+    const data = await resp.json();
+    const candidates = data.candidates || [];
+    if (candidates.length === 0) throw new Error('Gemini: no candidates returned');
+    const parts = candidates[0].content && candidates[0].content.parts;
+    if (!parts || parts.length === 0) throw new Error('Gemini: empty content parts');
+    return parts.map(p => p.text || '').join('');
   }
 
   // challenge type detection
