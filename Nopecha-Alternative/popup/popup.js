@@ -264,10 +264,12 @@ if ($('btn-record')) {
     if (!currentTabId) return;
     if (isRecording) {
       chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, () => {
+        if (chrome.runtime.lastError) {}
         updateRecordUI({ isRecording: false, lastFile: 'saving' });
       });
     } else {
       chrome.runtime.sendMessage({ type: 'START_RECORDING', tabId: currentTabId }, (resp) => {
+        if (chrome.runtime.lastError) return;
         if (resp && resp.ok) {
           updateRecordUI(resp.recordingState);
         }

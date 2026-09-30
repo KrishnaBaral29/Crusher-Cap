@@ -247,6 +247,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             streamId,
             tabId: targetId
           }, (resp) => {
+            if (chrome.runtime.lastError) {
+              const err = chrome.runtime.lastError.message;
+              ccLog(targetId, 'Record error: ' + err, 'error');
+              sendResponse({ ok: false, error: err });
+              return;
+            }
             if (resp && resp.ok) {
               recordingState = { isRecording: true, tabId: targetId, startTime: Date.now(), lastFile: null };
               ccLog(targetId, 'Website video recording started ⏺');
@@ -267,6 +273,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     case 'STOP_RECORDING': {
       chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_RECORD' }, (resp) => {
+        if (chrome.runtime.lastError) {
+          // consume error if offscreen is already closed
+        }
         sendResponse(resp || { ok: true });
       });
       return true;
@@ -441,7 +450,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         t.message = 'reCAPTCHA expired — refreshing...';
         setStatus(targetTabId, 'working', 'reCAPTCHA challenge expired — refreshing...', 0);
         ccLog(targetTabId, 'RECAPTCHA_RESET: expired challenge detected (' + (msg.reason || 'expired') + ') — resetting');
-        chrome.tabs.sendMessage(targetTabId, { type: 'RECAPTCHA_RESET' }, { frameId: 0 }, () => {});
+        chrome.tabs.sendMessage(targetTabId, { type: 'RECAPTCHA_RESET' }, { frameId: 0 }).catch(() => {});
       }
       sendResponse({ ok: true });
       break;
@@ -522,6 +531,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     case 'READ_TOKEN': {
       chrome.tabs.sendMessage(msg.tabId, { type: 'READ_TOKEN' }, { frameId: 0 }, (resp) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
         sendResponse(resp || { ok: false, error: 'no token found on page' });
       });
       return true;
@@ -671,7 +684,7 @@ async function armBframe(tabId) {
     if (!frames) return;
     for (const f of frames) {
       if (/\/api2\/bframe|\/enterprise\/bframe/.test(f.url)) {
-        chrome.tabs.sendMessage(tabId, { type: 'ARM_CHALLENGE' }, { frameId: f.frameId }, () => {});
+        chrome.tabs.sendMessage(tabId, { type: 'ARM_CHALLENGE' }, { frameId: f.frameId }).catch(() => {});
         ccLog(tabId, 'ARM_RELAY: armed bframe frameId=' + f.frameId);
       }
     }
