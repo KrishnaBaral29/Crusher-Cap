@@ -3457,19 +3457,19 @@ async function solveGeeTestVision(tabId, b64, mime) {
     {
       role: 'system',
       content:
-        'You are an expert computer vision system analyzing jigsaw slider CAPTCHA images.\n' +
-        'TASK: Find the horizontal pixel coordinate (X position) of the missing jigsaw puzzle piece cutout hole.\n\n' +
+        'You are an expert computer vision system analyzing slider puzzle CAPTCHA images.\n' +
+        'TASK: Find the horizontal pixel coordinate (X position) of the missing puzzle cutout hole or missing slot.\n\n' +
         'RULES:\n' +
-        '1. The image shows a background scene with a missing puzzle cutout hole/slot.\n' +
-        '2. The image width is typically 260 to 300 pixels.\n' +
-        '3. Locate the LEFT edge of the missing jigsaw cutout hole.\n' +
-        '4. Reply with ONLY the integer number of the X pixel coordinate (e.g. 136). Do not write words, explanations, or units.\n\n' +
-        'Example output: 142'
+        '1. The image shows a background scene with a missing puzzle cutout hole (either a classic jigsaw tab shape or a circular cutout slot).\n' +
+        '2. The image width is typically 260 to 320 pixels.\n' +
+        '3. Locate the LEFT edge of the missing puzzle or circular cutout hole.\n' +
+        '4. Reply with ONLY the integer number of the X pixel coordinate (e.g. 182). Do not write words, explanations, or units.\n\n' +
+        'Example output: 182'
     },
     {
       role: 'user',
       content: [
-        { type: 'text', text: 'Where is the left edge of the missing jigsaw puzzle cutout? Output ONLY the integer X pixel coordinate.' },
+        { type: 'text', text: 'Where is the left edge of the missing puzzle piece or circular cutout hole? Output ONLY the integer X pixel coordinate.' },
         { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/png') + ';base64,' + b64 } }
       ]
     }
@@ -3685,6 +3685,33 @@ async function calculateGeeTestGap(tabId, msg) {
   if (maxScore >= 40 && bestX >= 48) {
     ccLog(tabId, 'GEETEST: shadow edge analysis bestX=' + bestX + ' score=' + maxScore);
     return { gapX: bestX, minX: 14, naturalWidth: bw, naturalHeight: bh, method: 'shadow' };
+  }
+
+  // gradient step detection for light backgrounds (e.g. clock faces, white backgrounds)
+  let gradBestX = 0, gradMaxScore = 0;
+  const gradScores = new Array(bw).fill(0);
+  for (let x = 45; x < bw - 45; x++) {
+    for (let y = 15; y < bh - 15; y++) {
+      const idx = (y * bw + x) * 4;
+      const bCenter = bgData[idx] * 0.299 + bgData[idx + 1] * 0.587 + bgData[idx + 2] * 0.114;
+      const bLeft = bgData[(y * bw + (x - 2)) * 4] * 0.299 + bgData[(y * bw + (x - 2)) * 4 + 1] * 0.587 + bgData[(y * bw + (x - 2)) * 4 + 2] * 0.114;
+      const bRight = bgData[(y * bw + (x + 2)) * 4] * 0.299 + bgData[(y * bw + (x + 2)) * 4 + 1] * 0.587 + bgData[(y * bw + (x + 2)) * 4 + 2] * 0.114;
+      const diff = Math.max(0, bLeft - bCenter) + Math.abs(bRight - bLeft);
+      if (diff > 25) gradScores[x] += diff;
+    }
+  }
+  for (let x = 45; x < bw - 45; x++) {
+    let win = 0;
+    for (let k = -2; k <= 2; k++) win += gradScores[x + k] || 0;
+    if (win > gradMaxScore) {
+      gradMaxScore = win;
+      gradBestX = x;
+    }
+  }
+
+  if (gradMaxScore >= 600 && gradBestX >= 48) {
+    ccLog(tabId, 'GEETEST: gradient edge analysis bestX=' + gradBestX + ' score=' + Math.round(gradMaxScore));
+    return { gapX: gradBestX, minX: 14, naturalWidth: bw, naturalHeight: bh, method: 'gradient' };
   }
 
   // ai vision fallback
