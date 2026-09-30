@@ -120,14 +120,31 @@
 
   function findPuzzleBackground(track, container) {
     const scope = container || document;
-    const mediaElements = Array.from(scope.querySelectorAll('canvas, img, div[style*="background-image"], div[style*="background:"]')).filter(isVisible);
+
+    // Must be actual visual media: <img> with src, <canvas>, or <div> with url()
+    const mediaElements = Array.from(scope.querySelectorAll('canvas, img')).filter(isVisible);
+    const bgDivs = Array.from(scope.querySelectorAll('div[style*="url("], div[style*="url ("]')).filter(isVisible);
+    for (const d of bgDivs) {
+      if (!mediaElements.includes(d)) mediaElements.push(d);
+    }
 
     const candidates = mediaElements.map((el) => {
       const r = el.getBoundingClientRect();
       const cls = String(el.className || '').toLowerCase();
-      const isLogo = cls.includes('logo') || cls.includes('icon') || cls.includes('watermark');
-      return { el, width: r.width, height: r.height, top: r.top, left: r.left, bottom: r.bottom, area: r.width * r.height, isLogo };
-    }).filter((item) => !item.isLogo && item.width >= 150 && item.height >= 75);
+      const id = String(el.id || '').toLowerCase();
+      const isLogo = cls.includes('logo') || id.includes('logo') || cls.includes('icon') || cls.includes('watermark') || cls.includes('avatar');
+      const isModal = cls.includes('modal') || cls.includes('dialog') || cls.includes('popup') || cls.includes('wrapper') || cls.includes('card');
+      const aspectRatio = r.width > 0 ? (r.height / r.width) : 0;
+      return { el, width: r.width, height: r.height, top: r.top, left: r.left, bottom: r.bottom, area: r.width * r.height, aspectRatio, isLogo, isModal };
+    }).filter((item) => {
+      return (
+        !item.isLogo &&
+        !item.isModal &&
+        item.width >= 160 && item.width <= 480 &&
+        item.height >= 90 && item.height <= 360 &&
+        item.aspectRatio >= 0.35 && item.aspectRatio <= 1.25
+      );
+    });
 
     if (track) {
       const tr = track.getBoundingClientRect();
@@ -139,7 +156,13 @@
     }
 
     if (candidates.length > 0) {
-      candidates.sort((a, b) => b.area - a.area);
+      // Prioritize <img> or <canvas> over <div>
+      candidates.sort((a, b) => {
+        const aIsImg = a.el.tagName === 'IMG' || a.el.tagName === 'CANVAS' ? 1 : 0;
+        const bIsImg = b.el.tagName === 'IMG' || b.el.tagName === 'CANVAS' ? 1 : 0;
+        if (aIsImg !== bIsImg) return bIsImg - aIsImg;
+        return b.area - a.area;
+      });
       return candidates[0].el;
     }
 
@@ -149,32 +172,44 @@
   function findSliderTrack(bg) {
     const allElements = Array.from(document.querySelectorAll('*')).filter(isVisible);
 
-    // 1. Text-based search: The track has the prompt text!
-    for (const el of allElements) {
-      const txt = (el.textContent || '');
-      const isTrackText = (
-        txt.includes('drag the slider to restore the complete image') ||
-        txt.includes('Please drag the slider') ||
-        txt.includes('drag the slider') ||
-        txt.includes('向右滑动验证') ||
-        txt.includes('向右滑动') ||
-        txt.includes('拖动滑块') ||
-        txt.includes('slide to verify')
-      );
-
-      if (isTrackText) {
+    // 1. If bg is known, track is immediately underneath bg
+    if (bg) {
+      const bgr = bg.getBoundingClientRect();
+      const underBg = allElements.filter((el) => {
+        if (el === bg || el.contains(bg)) return false;
+        const cls = String(el.className || '').toLowerCase();
+        const id = String(el.id || '').toLowerCase();
+        if (cls.includes('logo') || id.includes('logo') || cls.includes('footer') || cls.includes('header')) return false;
         const r = el.getBoundingClientRect();
-        // If el is the text container itself, its parent might be the actual track
-        if (r.width >= 160 && r.width <= 500 && r.height >= 20 && r.height <= 85) {
-          const p = el.parentElement;
-          if (p) {
-            const pr = p.getBoundingClientRect();
-            if (pr.width >= 160 && pr.width <= 500 && pr.height >= 20 && pr.height <= 85 && pr.width >= r.width) {
-              return p;
-            }
-          }
-          return el;
+        return (
+          r.top >= bgr.bottom - 12 &&
+          r.top <= bgr.bottom + 95 &&
+          r.width >= 160 && r.width <= 500 &&
+          r.height >= 22 && r.height <= 75 &&
+          Math.abs(r.left - bgr.left) <= 45
+        );
+      });
+
+      if (underBg.length > 0) {
+        // Prefer element containing prompt text or track class
+        const withTextOrClass = underBg.filter((el) => {
+          const txt = (el.textContent || '').toLowerCase();
+          const cls = String(el.className || '').toLowerCase();
+          const id = String(el.id || '').toLowerCase();
+          return (
+            txt.includes('drag') || txt.includes('slider') || txt.includes('slide') ||
+            txt.includes('滑动') || txt.includes('拖动') ||
+            cls.includes('track') || id.includes('track') ||
+            cls.includes('sliding') || id.includes('sliding') ||
+            cls.includes('scale')
+          );
+        });
+        if (withTextOrClass.length > 0) {
+          withTextOrClass.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+          return withTextOrClass[0];
         }
+        underBg.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+        return underBg[0];
       }
     }
 
@@ -198,87 +233,24 @@
       }
     }
 
-    // 3. Geometric fallback: If puzzle bg is known, track is immediately below bg
-    if (bg) {
-      const bgr = bg.getBoundingClientRect();
-      const underBg = allElements.filter((el) => {
-        if (el === bg || el.contains(bg)) return false;
-        const cls = String(el.className || '').toLowerCase();
-        if (cls.includes('logo') || cls.includes('footer') || cls.includes('header')) return false;
-        const r = el.getBoundingClientRect();
-        return (
-          r.top >= bgr.bottom - 15 &&
-          r.top <= bgr.bottom + 95 &&
-          r.width >= 160 && r.width <= 500 &&
-          r.height >= 20 && r.height <= 85 &&
-          Math.abs(r.left - bgr.left) <= 50
-        );
-      });
-      if (underBg.length > 0) {
-        underBg.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
-        return underBg[0];
-      }
-    }
-
-    return null;
-  }
-
-  function findSliderHandleOnTrack(track, bg) {
-    const minTop = bg ? (bg.getBoundingClientRect().bottom - 15) : 0;
-    const tr = track ? track.getBoundingClientRect() : null;
-
-    // Specific Aliyun handle selectors
-    const specificSelectors = [
-      '#aliyunCaptcha-sliding-slider',
-      '[id*="sliding-slider"]',
-      '[class*="sliding-slider"]',
-      '.btn_slide',
-      '[class*="btn_slide"]',
-      '[class*="slider-btn"]',
-      '[class*="slider_btn"]',
-      '[class*="slider-button"]',
-      '[class*="slider_button"]',
-      '[class*="slider-handle"]',
-      '[class*="slider_handle"]',
-      '[class*="drag-btn"]',
-      '[role="slider"]'
-    ];
-
-    const searchRoots = track ? [track, track.parentElement || track, document] : [document];
-    for (const root of searchRoots) {
-      for (const sel of specificSelectors) {
-        const els = root.querySelectorAll(sel);
-        for (const el of els) {
-          if (!isVisible(el)) continue;
-          const cls = String(el.className || '').toLowerCase();
-          if (cls.includes('logo') || cls.includes('text') || cls.includes('title') || cls.includes('wrap')) continue;
-          const r = el.getBoundingClientRect();
-
-          // STRICT FILTER: Must be below puzzle image and matching handle size!
-          if (r.top >= minTop && r.width >= 20 && r.width <= 90 && r.height >= 20 && r.height <= 90) {
-            if (!tr || Math.abs((r.top + r.height / 2) - (tr.top + tr.height / 2)) <= 30) {
-              return el;
-            }
-          }
-        }
-      }
-    }
-
-    // Match arrow button by text (">>") strictly below the image
-    const allElements = Array.from((track ? (track.parentElement || track) : document).querySelectorAll('*')).filter(isVisible);
+    // 3. Text-based search
     for (const el of allElements) {
-      const cls = String(el.className || '').toLowerCase();
-      if (cls.includes('logo') || cls.includes('text') || cls.includes('title') || cls.includes('header') || cls.includes('wrap')) continue;
-      const txt = (el.textContent || '').trim();
-      const isArrowText = txt === '>>' || txt === '»' || txt === '>' || txt === '→' || txt === '›';
-      const r = el.getBoundingClientRect();
-
-      if (isArrowText && r.top >= minTop) {
-        if (r.width >= 16 && r.width <= 90 && r.height >= 16 && r.height <= 90) {
+      const txt = (el.textContent || '');
+      const isTrackText = (
+        txt.includes('drag the slider to restore the complete image') ||
+        txt.includes('Please drag the slider') ||
+        txt.includes('向右滑动验证') ||
+        txt.includes('向右滑动') ||
+        txt.includes('拖动滑块') ||
+        txt.includes('slide to verify')
+      );
+      if (isTrackText) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 160 && r.width <= 500 && r.height >= 20 && r.height <= 85) {
           const p = el.parentElement;
-          if (p && p !== track && p !== document.body) {
+          if (p) {
             const pr = p.getBoundingClientRect();
-            if (pr.width >= 24 && pr.width <= 90 && pr.height >= 24 && pr.height <= 90 && pr.top >= minTop) {
+            if (pr.width >= 160 && pr.width <= 500 && pr.height >= 20 && pr.height <= 85 && pr.width >= r.width) {
               return p;
             }
           }
@@ -287,24 +259,93 @@
       }
     }
 
-    // Leftmost square button sitting on the track below the image
-    if (track) {
-      const allInTrack = Array.from((track.parentElement || track).querySelectorAll('*')).filter(isVisible);
-      for (const el of allInTrack) {
-        if (el === track) continue;
-        const cls = String(el.className || '').toLowerCase();
-        if (cls.includes('logo') || cls.includes('text') || cls.includes('desc') || cls.includes('prompt') || cls.includes('wrap')) continue;
-        const r = el.getBoundingClientRect();
+    return null;
+  }
 
+  function findSliderHandle(track, bg) {
+    const allElements = Array.from(document.querySelectorAll('*')).filter(isVisible);
+
+    // If bg is known, the slider button is strictly below bg and at the left side of bg
+    if (bg) {
+      const bgr = bg.getBoundingClientRect();
+      const candidates = allElements.filter((el) => {
+        if (el === bg || el.contains(bg) || (track && el === track)) return false;
+        const cls = String(el.className || '').toLowerCase();
+        const id = String(el.id || '').toLowerCase();
         if (
-          r.top >= minTop &&
-          r.width >= 24 && r.width <= 80 &&
-          r.height >= 24 && r.height <= 80 &&
-          Math.abs((r.top + r.height / 2) - (tr.top + tr.height / 2)) <= 20 &&
-          r.left >= tr.left - 15 && r.left <= tr.left + tr.width * 0.45
+          cls.includes('logo') || id.includes('logo') ||
+          cls.includes('close') || id.includes('close') ||
+          cls.includes('refresh') || id.includes('refresh') ||
+          cls.includes('reload') || id.includes('reload') ||
+          cls.includes('title') || id.includes('title') ||
+          cls.includes('header') || id.includes('header') ||
+          cls.includes('footer') || id.includes('footer') ||
+          cls.includes('desc') || cls.includes('prompt')
         ) {
-          return el;
+          return false;
         }
+
+        const r = el.getBoundingClientRect();
+        return (
+          r.top >= bgr.bottom - 10 &&
+          r.top <= bgr.bottom + 95 &&
+          r.left >= bgr.left - 25 &&
+          r.left <= bgr.left + 90 &&
+          r.width >= 22 && r.width <= 80 &&
+          r.height >= 22 && r.height <= 70
+        );
+      });
+
+      if (candidates.length > 0) {
+        // Priority 1: Known handle classes or IDs
+        for (const el of candidates) {
+          const cls = String(el.className || '').toLowerCase();
+          const id = String(el.id || '').toLowerCase();
+          if (
+            cls.includes('slider') || id.includes('slider') ||
+            cls.includes('btn') || id.includes('btn') ||
+            cls.includes('handler') || id.includes('handler') ||
+            cls.includes('drag') || id.includes('drag') ||
+            cls.includes('iconfont') ||
+            el.getAttribute('role') === 'slider'
+          ) {
+            return el;
+          }
+        }
+
+        // Priority 2: Contains arrow or icon child
+        for (const el of candidates) {
+          const txt = (el.textContent || '').trim();
+          if (txt === '>>' || txt === '»' || txt === '>' || txt === '→' || txt === '›' || el.querySelector('svg, i, span')) {
+            return el;
+          }
+        }
+
+        // Priority 3: The leftmost candidate element
+        candidates.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        return candidates[0];
+      }
+    }
+
+    // Fallback: If track is known but bg is null (pure slider without puzzle image)
+    if (track) {
+      const tr = track.getBoundingClientRect();
+      const inTrack = allElements.filter((el) => {
+        if (el === track || el.contains(track)) return false;
+        const cls = String(el.className || '').toLowerCase();
+        if (cls.includes('logo') || cls.includes('text') || cls.includes('prompt') || cls.includes('desc')) return false;
+        const r = el.getBoundingClientRect();
+        return (
+          r.width >= 22 && r.width <= 80 &&
+          r.height >= 22 && r.height <= 70 &&
+          Math.abs((r.top + r.height / 2) - (tr.top + tr.height / 2)) <= 25 &&
+          r.left >= tr.left - 15 && r.left <= tr.left + 90
+        );
+      });
+
+      if (inTrack.length > 0) {
+        inTrack.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        return inTrack[0];
       }
     }
 
@@ -312,20 +353,20 @@
   }
 
   function findAliyunChallenge() {
-    // 1. Locate background image first (largest visible visual anchor)
+    // 1. Locate background image first (largest visual puzzle image)
     const bg = findPuzzleBackground(null, null);
 
     // 2. Locate track relative to bg
     const sliderTrack = findSliderTrack(bg);
 
     // 3. Locate handle strictly below bg
-    let sliderHandle = findSliderHandleOnTrack(sliderTrack, bg);
+    let sliderHandle = findSliderHandle(sliderTrack, bg);
 
     // Failsafe: Handle must NEVER be inside or above puzzle background image!
     if (bg && sliderHandle) {
       const hr = sliderHandle.getBoundingClientRect();
       const br = bg.getBoundingClientRect();
-      if (hr.top < br.bottom - 15) {
+      if (hr.top < br.bottom - 10) {
         sliderHandle = null;
       }
     }
@@ -357,11 +398,11 @@
     if (bg) {
       const bgr = bg.getBoundingClientRect();
       const scope = container || document;
-      const media = Array.from(scope.querySelectorAll('canvas, img, div[style*="background-image"], div[style*="background:"]')).filter(isVisible);
+      const media = Array.from(scope.querySelectorAll('canvas, img, div[style*="background-image"], div[style*="url("]')).filter(isVisible);
       const sliceCandidates = media.filter((el) => {
         if (el === bg) return false;
         const cls = String(el.className || '').toLowerCase();
-        if (cls.includes('logo') || cls.includes('track') || cls.includes('icon') || cls.includes('wrap')) return false;
+        if (cls.includes('logo') || cls.includes('track') || cls.includes('icon')) return false;
         const r = el.getBoundingClientRect();
         return (
           r.width >= 18 && r.width <= 120 &&
@@ -510,7 +551,10 @@
       }
 
       if (Date.now() - lastLog > 2000) {
-        log(`Waiting for elements... track=${!!ch.sliderTrack} handle=${!!ch.sliderHandle} bg=${!!ch.bg} ready=${ch.isReady}`);
+        const bgInfo = ch.bg ? `${ch.bg.tagName}.${ch.bg.className || ''}(${Math.round(ch.bg.getBoundingClientRect().width)}x${Math.round(ch.bg.getBoundingClientRect().height)})` : 'null';
+        const trackInfo = ch.sliderTrack ? `${ch.sliderTrack.tagName}.${ch.sliderTrack.className || ''}(${Math.round(ch.sliderTrack.getBoundingClientRect().width)}x${Math.round(ch.sliderTrack.getBoundingClientRect().height)})` : 'null';
+        const handleInfo = ch.sliderHandle ? `${ch.sliderHandle.tagName}.${ch.sliderHandle.className || ''}(${Math.round(ch.sliderHandle.getBoundingClientRect().width)}x${Math.round(ch.sliderHandle.getBoundingClientRect().height)})` : 'null';
+        log(`Waiting for elements... track=${!!ch.sliderTrack} handle=${!!ch.sliderHandle} bg=${!!ch.bg} ready=${ch.isReady} | bg=${bgInfo} track=${trackInfo} handle=${handleInfo}`);
         lastLog = Date.now();
       }
 
@@ -839,6 +883,11 @@
   if (chrome && chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === 'function') {
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg.type === 'ALIYUN_SOLVE' || msg.type === 'SLIDER_SOLVE') {
+        const ch = findAliyunChallenge();
+        if (!ch.found && !ch.bg && !ch.sliderTrack) {
+          sendResponse({ ok: false, reason: 'no_captcha_in_frame' });
+          return;
+        }
         settingsCache = null;
         solveAliyunChallenge();
         sendResponse({ ok: true });
