@@ -3743,45 +3743,144 @@ async function calculateGeeTestGap(tabId, msg) {
   throw new Error('Could not confidently calculate GeeTest gap position');
 }
 
+async function addAliyunBoxOverlay(b64, mime = 'image/png', numBoxes = 8) {
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: mime || 'image/png' });
+    const bitmap = await createImageBitmap(blob);
+
+    const w = 300;
+    const h = 300;
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+
+    // Draw background image scaled to standard 300x300
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+
+    const colW = w / numBoxes;
+    const pad = 2;
+    const radius = 6;
+    const topY = Math.round(h * 0.08);
+    const botY = Math.round(h * 0.92);
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0, 140, 255, 0.45)';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < numBoxes; i++) {
+      const x0 = Math.round(i * colW + pad);
+      const x1 = Math.round((i + 1) * colW - pad);
+      const boxW = x1 - x0;
+      const boxH = botY - topY;
+
+      // Rounded capsule / box (matching user reference)
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(x0, topY, boxW, boxH, radius);
+      } else {
+        ctx.rect(x0, topY, boxW, boxH);
+      }
+      ctx.fillStyle = 'rgba(0, 140, 255, 0.04)';
+      ctx.fill();
+      ctx.stroke();
+
+      // Top number badge
+      const cx = Math.round(x0 + boxW / 2);
+      ctx.fillStyle = 'rgba(0, 110, 255, 0.85)';
+      ctx.fillRect(cx - 9, topY - 14, 18, 16);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(String(i + 1), cx, topY - 6);
+    }
+
+    const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+    const arrayBuffer = await outBlob.arrayBuffer();
+    const outBytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < outBytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, outBytes.subarray(i, i + chunkSize));
+    }
+    return { b64: btoa(binary), mime: 'image/png' };
+  } catch (_) {
+    return { b64, mime };
+  }
+}
+
 async function solveAliyunVision(tabId, b64, mime) {
+  const NUM_BOXES = 8;
+  const overlayData = await addAliyunBoxOverlay(b64, mime, NUM_BOXES);
+  const activeB64 = overlayData.b64 || b64;
+  const activeMime = overlayData.mime || mime;
+
   const messages = [
     {
       role: 'system',
       content:
         'You are an expert AI vision system solving Aliyun (Alibaba Cloud) Captcha 2.0 image restoration slider puzzles.\n' +
-        'The image width is normalized to 300 pixels (X=0 at the left border, X=300 at the right border).\n' +
-        'In this challenge, an object component (such as a teacup handle, teapot spout, mug ear, wheel, or puzzle cutout) ' +
-        'is dragged horizontally from left to right across the image to restore an incomplete object.\n\n' +
+        'The image is 300x300 pixels with ' + NUM_BOXES + ' vertical transparent guide boxes labeled [1] through [' + NUM_BOXES + '] across its width.\n' +
+        'A detached piece or object on the far left (around box [1]) must be slid horizontally across the scene to restore an incomplete object or empty shelf space.\n\n' +
         'CRITICAL RULES FOR ACCURACY:\n' +
-        '1. NEVER GUESS THE CENTER (X=140 to 160). Puzzle pieces or handles NEVER attach in the front middle of a cup, glass, or object.\n' +
-        '2. For cups, mugs, and teapots:\n' +
-        '   - A handle attaches to the OUTER RIM / EDGE of the cup body (usually X=80-105 for left-side attachment, or X=205-235 for right-side attachment).\n' +
-        '   - Look at the saucer and cup body: see which side of the cup is missing its handle.\n' +
-        '   - If there are multiple cups in a row, inspect each cup from left to right: find the cup that is incomplete/missing its handle.\n' +
-        '3. For missing jigsaw or circular cutout slots: locate the exact X coordinate where the cutout piece fits.\n' +
-        '4. Return ONLY a single valid JSON object in this exact format:\n' +
-        '{"targetX": <integer 25-275>, "object": "<object name>", "side": "left|right|slot", "reason": "<1 concise sentence>"}\n' +
-        '5. Do NOT include markdown code fences or any extra text.'
+        '1. Inspect the scene carefully across all boxes [1]-[' + NUM_BOXES + ']:\n' +
+        '   - If it is a shelf or cabinet: look for the EMPTY shelf space or gap between items where the detached object belongs.\n' +
+        '   - If it is cups, mugs, or teapots: look for the cup missing its handle on the outer rim (NEVER in the middle of a cup).\n' +
+        '   - If it is a missing jigsaw/cutout slot: find the box containing the cutout slot.\n' +
+        '2. Identify which numbered box [1]-[' + NUM_BOXES + '] contains the target slot, empty space, or missing component location.\n' +
+        '3. Return ONLY a single valid JSON object in this exact format:\n' +
+        '{"targetBox": <integer 1-' + NUM_BOXES + '>, "exactX": <optional integer 25-275>, "object": "<object name>", "reason": "<1 concise sentence>"}\n' +
+        '4. Do NOT include markdown code fences or any extra text.'
     },
     {
       role: 'user',
       content: [
-        { type: 'text', text: 'Identify where the missing component attaches to complete the object. Output JSON only.' },
-        { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/png') + ';base64,' + b64 } }
+        { type: 'text', text: 'Which numbered box [1]-[' + NUM_BOXES + '] contains the target slot or missing component position? Output JSON only.' },
+        { type: 'image_url', image_url: { url: 'data:' + (activeMime || 'image/png') + ';base64,' + activeB64 } }
       ]
     }
   ];
 
   const reply = await xkiroChat(tabId, messages, { maxTokens: 140, timeoutMs: 25000 });
   let targetX = null;
+  let targetBox = null;
+  let reason = '';
+
   try {
     const cleanJson = String(reply).replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
     const parsed = JSON.parse(cleanJson);
-    if (typeof parsed.targetX === 'number') targetX = parsed.targetX;
-    else if (typeof parsed.x === 'number') targetX = parsed.x;
+    if (typeof parsed.targetBox === 'number' && parsed.targetBox >= 1 && parsed.targetBox <= NUM_BOXES) {
+      targetBox = parsed.targetBox;
+    } else if (typeof parsed.box === 'number' && parsed.box >= 1 && parsed.box <= NUM_BOXES) {
+      targetBox = parsed.box;
+    }
+    if (typeof parsed.exactX === 'number' && parsed.exactX >= 20 && parsed.exactX <= 280) {
+      targetX = parsed.exactX;
+    } else if (typeof parsed.targetX === 'number' && parsed.targetX >= 20 && parsed.targetX <= 280) {
+      targetX = parsed.targetX;
+    }
+    reason = parsed.reason || '';
   } catch (_) {
-    const match = String(reply).match(/"targetX"\s*:\s*(\d+)/i) || String(reply).match(/"x"\s*:\s*(\d+)/i) || String(reply).match(/\b(\d{2,3})\b/);
-    if (match) targetX = parseInt(match[1], 10);
+    const boxMatch = String(reply).match(/"targetBox"\s*:\s*(\d+)/i) || String(reply).match(/"box"\s*:\s*(\d+)/i);
+    if (boxMatch) {
+      const b = parseInt(boxMatch[1], 10);
+      if (b >= 1 && b <= NUM_BOXES) targetBox = b;
+    }
+    const xMatch = String(reply).match(/"exactX"\s*:\s*(\d+)/i) || String(reply).match(/"targetX"\s*:\s*(\d+)/i);
+    if (xMatch) targetX = parseInt(xMatch[1], 10);
+  }
+
+  // If targetBox was identified, calculate and anchor targetX to the box
+  const boxWidth = 300 / NUM_BOXES;
+  if (targetBox !== null) {
+    const boxCenterX = Math.round((targetBox - 0.5) * boxWidth);
+    if (typeof targetX === 'number' && Math.abs(targetX - boxCenterX) <= boxWidth) {
+      // Use refined exactX
+    } else {
+      targetX = boxCenterX;
+    }
+    ccLog(tabId, 'ALIYUN_GAP: Qwen Vision identified targetBox=[' + targetBox + '] -> targetX=' + targetX + (reason ? ' (' + reason + ')' : ''));
   }
 
   if (typeof targetX !== 'number' || isNaN(targetX) || targetX < 15 || targetX > 285) {
