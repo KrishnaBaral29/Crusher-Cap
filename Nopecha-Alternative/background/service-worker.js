@@ -3748,22 +3748,25 @@ async function solveAliyunVision(tabId, b64, mime) {
     {
       role: 'system',
       content:
-        'You are an expert AI vision system solving Aliyun / Alibaba Cloud Slider and Inpainting CAPTCHAs.\n' +
-        'The challenge asks to drag the slider to restore the complete image or complete the puzzle.\n' +
-        'In this challenge, an object piece or puzzle fragment starts at the left edge (X=0) and slides horizontally ' +
-        'across the 300px image as the user drags the slider.\n' +
-        'When the user drags the slider to the correct position, the piece perfectly snaps into its natural matching place.\n\n' +
-        'RULES:\n' +
-        '1. Assume the normalized image width is 300 pixels.\n' +
-        '2. Identify the sliding piece/fragment at the left edge of the image, and find where it belongs on the scene to complete/restore the truncated object.\n' +
-        '3. If there is a missing jigsaw/circle puzzle hole instead, find the left edge of that hole.\n' +
-        '4. Output ONLY valid JSON: {"targetX": <integer 15-285>, "reason": "<brief 1 sentence explanation>"}\n' +
-        '5. Do NOT include markdown code blocks or extra text.'
+        'You are an expert AI vision system solving Aliyun (Alibaba Cloud) Captcha 2.0 image restoration slider puzzles.\n' +
+        'The image width is normalized to 300 pixels (X=0 at the left border, X=300 at the right border).\n' +
+        'In this challenge, an object component (such as a teacup handle, teapot spout, mug ear, wheel, or puzzle cutout) ' +
+        'is dragged horizontally from left to right across the image to restore an incomplete object.\n\n' +
+        'CRITICAL RULES FOR ACCURACY:\n' +
+        '1. NEVER GUESS THE CENTER (X=140 to 160). Puzzle pieces or handles NEVER attach in the front middle of a cup, glass, or object.\n' +
+        '2. For cups, mugs, and teapots:\n' +
+        '   - A handle attaches to the OUTER RIM / EDGE of the cup body (usually X=80-105 for left-side attachment, or X=205-235 for right-side attachment).\n' +
+        '   - Look at the saucer and cup body: see which side of the cup is missing its handle.\n' +
+        '   - If there are multiple cups in a row, inspect each cup from left to right: find the cup that is incomplete/missing its handle.\n' +
+        '3. For missing jigsaw or circular cutout slots: locate the exact X coordinate where the cutout piece fits.\n' +
+        '4. Return ONLY a single valid JSON object in this exact format:\n' +
+        '{"targetX": <integer 25-275>, "object": "<object name>", "side": "left|right|slot", "reason": "<1 concise sentence>"}\n' +
+        '5. Do NOT include markdown code fences or any extra text.'
     },
     {
       role: 'user',
       content: [
-        { type: 'text', text: 'Find the target horizontal X coordinate (integer 15-285 on 300px scale) to restore the complete image. Output JSON only.' },
+        { type: 'text', text: 'Identify where the missing component attaches to complete the object. Output JSON only.' },
         { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/png') + ';base64,' + b64 } }
       ]
     }

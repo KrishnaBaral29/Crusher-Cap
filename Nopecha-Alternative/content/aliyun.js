@@ -851,16 +851,22 @@
           maxTravel = Math.max(40, Math.round(bgRect.width - btnRect.width));
         }
 
-        const sliceStartOffset = sliceRect ? Math.round(sliceRect.left - bgRect.left) : 0;
+        // Only consider sliceStartOffset if slice is a valid small piece (< 75px)
+        const isValidSlice = sliceRect && sliceRect.width >= 15 && sliceRect.width <= 75 && sliceRect.height >= 15;
+        const sliceStartOffset = isValidSlice ? Math.max(0, Math.round(sliceRect.left - bgRect.left)) : 0;
         const sliceTravelNeeded = Math.max(0, gapCssX - sliceStartOffset);
 
-        // Track-to-image scale ratio
-        const pieceWidth = sliceRect ? sliceRect.width : btnRect.width;
-        const usableImageWidth = Math.max(1, bgRect.width - pieceWidth);
-        const ratio = maxTravel / usableImageWidth;
-        const travelRatio = (ratio > 0.82 && ratio < 1.18) ? 1.0 : ratio;
+        // Track-to-image scale ratio: In Aliyun Captcha 2.0, track travel directly maps to image coordinates
+        let travelRatio = 1.0;
+        const usableImgWidth = Math.max(40, bgRect.width - btnRect.width);
+        const rawRatio = maxTravel / usableImgWidth;
+        if (rawRatio >= 0.85 && rawRatio <= 1.15) {
+          travelRatio = 1.0;
+        } else if (rawRatio > 0.4 && rawRatio < 2.5) {
+          travelRatio = rawRatio;
+        }
 
-        const targetDistance = Math.max(10, Math.min(maxTravel - 2, Math.round(sliceTravelNeeded * travelRatio)));
+        const targetDistance = Math.max(12, Math.min(maxTravel - 2, Math.round(sliceTravelNeeded * travelRatio)));
 
         log('drag geometry: gapCssX=' + gapCssX + 'px sliceStart=' + sliceStartOffset + 'px travelNeeded=' + sliceTravelNeeded + 'px maxTravel=' + maxTravel + 'px finalDistance=' + targetDistance + 'px');
 
