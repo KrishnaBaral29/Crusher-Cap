@@ -205,10 +205,10 @@
           );
         });
         if (withTextOrClass.length > 0) {
-          withTextOrClass.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+          withTextOrClass.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
           return withTextOrClass[0];
         }
-        underBg.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+        underBg.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
         return underBg[0];
       }
     }
@@ -352,6 +352,28 @@
     return null;
   }
 
+  function getEffectiveTrack(sliderHandle, sliderTrack) {
+    if (sliderHandle && sliderHandle.parentElement) {
+      let p = sliderHandle.parentElement;
+      let best = p;
+      let bestWidth = p.getBoundingClientRect().width;
+      while (p && p !== document.body && p !== document.documentElement) {
+        const pr = p.getBoundingClientRect();
+        if (pr.height >= 20 && pr.height <= 85 && pr.width >= 160 && pr.width <= 550) {
+          if (pr.width > bestWidth) {
+            best = p;
+            bestWidth = pr.width;
+          }
+        } else if (pr.height > 100) {
+          break;
+        }
+        p = p.parentElement;
+      }
+      if (bestWidth >= 160) return best;
+    }
+    return sliderTrack;
+  }
+
   function findAliyunChallenge() {
     // 1. Locate background image first (largest visual puzzle image)
     const bg = findPuzzleBackground(null, null);
@@ -480,6 +502,61 @@
       } catch (e) {
         log('Image canvas draw error (CORS):', e.message);
       }
+
+      // Try direct content script fetch
+      try {
+        const resp = await fetch(el.src);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          const reader = new FileReader();
+          const b64Promise = new Promise((resolve) => {
+            reader.onloadend = () => {
+              const res = reader.result;
+              if (typeof res === 'string' && res.includes(',')) {
+                resolve(res.split(',')[1]);
+              } else {
+                resolve(null);
+              }
+            };
+            reader.onerror = () => resolve(null);
+          });
+          reader.readAsDataURL(blob);
+          const fetchedB64 = await b64Promise;
+          if (fetchedB64 && fetchedB64.length > 50) {
+            log('Image fetched and converted via content fetch ✓');
+            return { b64: fetchedB64, mime: blob.type || 'image/png', url: el.src };
+          }
+        }
+      } catch (_) {}
+
+      // Fallback: visual element capture via background tab capture
+      try {
+        const r = el.getBoundingClientRect();
+        if (r.width > 20 && r.height > 20) {
+          const resp = await new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+              {
+                type: 'CAPTURE_ELEMENT_RECT',
+                rect: {
+                  x: Math.round(r.left),
+                  y: Math.round(r.top),
+                  width: Math.round(r.width),
+                  height: Math.round(r.height),
+                  dpr: window.devicePixelRatio || 1
+                }
+              },
+              resolve
+            );
+          });
+          if (resp && resp.ok && resp.b64) {
+            log('Element visual crop captured via background tab capture ✓');
+            return { b64: resp.b64, mime: 'image/png', url: el.src };
+          }
+        }
+      } catch (e) {
+        log('CAPTURE_ELEMENT_RECT fallback error:', e.message);
+      }
+
       if (el.src && /^https?:\/\//i.test(el.src)) {
         return { url: el.src };
       }
@@ -767,18 +844,23 @@
         const gapCssX = Math.round(gapResult.gapX * scale);
 
         const btnRect = ch.sliderHandle.getBoundingClientRect();
-        const trackRect = ch.sliderTrack ? ch.sliderTrack.getBoundingClientRect() : null;
-        const maxTravel = trackRect ? Math.round(trackRect.width - btnRect.width) : Math.round(bgRect.width - btnRect.width);
+        const effectiveTrack = getEffectiveTrack(ch.sliderHandle, ch.sliderTrack);
+        const trackRect = effectiveTrack ? effectiveTrack.getBoundingClientRect() : null;
+        let maxTravel = trackRect ? Math.round(trackRect.width - btnRect.width) : Math.round(bgRect.width - btnRect.width);
+        if (maxTravel < 40) {
+          maxTravel = Math.max(40, Math.round(bgRect.width - btnRect.width));
+        }
 
         const sliceStartOffset = sliceRect ? Math.round(sliceRect.left - bgRect.left) : 0;
         const sliceTravelNeeded = Math.max(0, gapCssX - sliceStartOffset);
 
         // Track-to-image scale ratio
-        const usableImageWidth = Math.max(1, bgRect.width - (sliceRect ? sliceRect.width : btnRect.width));
+        const pieceWidth = sliceRect ? sliceRect.width : btnRect.width;
+        const usableImageWidth = Math.max(1, bgRect.width - pieceWidth);
         const ratio = maxTravel / usableImageWidth;
         const travelRatio = (ratio > 0.82 && ratio < 1.18) ? 1.0 : ratio;
 
-        const targetDistance = Math.max(10, Math.min(maxTravel, Math.round(sliceTravelNeeded * travelRatio)));
+        const targetDistance = Math.max(10, Math.min(maxTravel - 2, Math.round(sliceTravelNeeded * travelRatio)));
 
         log('drag geometry: gapCssX=' + gapCssX + 'px sliceStart=' + sliceStartOffset + 'px travelNeeded=' + sliceTravelNeeded + 'px maxTravel=' + maxTravel + 'px finalDistance=' + targetDistance + 'px');
 

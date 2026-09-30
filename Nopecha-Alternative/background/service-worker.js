@@ -706,7 +706,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'Aliyun solver is disabled' });
         return true;
       }
-      calculateGeeTestGap(tabId, msg)
+      calculateAliyunGap(tabId, msg)
         .then((res) => sendResponse({ ok: true, ...res }))
         .catch((e) => {
           ccLog(tabId, 'ALIYUN_GAP: failed: ' + (e.message || e), 'error');
@@ -3743,5 +3743,104 @@ async function calculateGeeTestGap(tabId, msg) {
   throw new Error('Could not confidently calculate GeeTest gap position');
 }
 
+async function solveAliyunVision(tabId, b64, mime) {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You are an expert AI vision system solving Aliyun / Alibaba Cloud Slider and Inpainting CAPTCHAs.\n' +
+        'The challenge asks to drag the slider to restore the complete image or complete the puzzle.\n' +
+        'In this challenge, an object piece or puzzle fragment starts at the left edge (X=0) and slides horizontally ' +
+        'across the 300px image as the user drags the slider.\n' +
+        'When the user drags the slider to the correct position, the piece perfectly snaps into its natural matching place.\n\n' +
+        'RULES:\n' +
+        '1. Assume the normalized image width is 300 pixels.\n' +
+        '2. Identify the sliding piece/fragment at the left edge of the image, and find where it belongs on the scene to complete/restore the truncated object.\n' +
+        '3. If there is a missing jigsaw/circle puzzle hole instead, find the left edge of that hole.\n' +
+        '4. Output ONLY valid JSON: {"targetX": <integer 15-285>, "reason": "<brief 1 sentence explanation>"}\n' +
+        '5. Do NOT include markdown code blocks or extra text.'
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Find the target horizontal X coordinate (integer 15-285 on 300px scale) to restore the complete image. Output JSON only.' },
+        { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/png') + ';base64,' + b64 } }
+      ]
+    }
+  ];
 
+  const reply = await xkiroChat(tabId, messages, { maxTokens: 140, timeoutMs: 25000 });
+  let targetX = null;
+  try {
+    const cleanJson = String(reply).replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+    if (typeof parsed.targetX === 'number') targetX = parsed.targetX;
+    else if (typeof parsed.x === 'number') targetX = parsed.x;
+  } catch (_) {
+    const match = String(reply).match(/"targetX"\s*:\s*(\d+)/i) || String(reply).match(/"x"\s*:\s*(\d+)/i) || String(reply).match(/\b(\d{2,3})\b/);
+    if (match) targetX = parseInt(match[1], 10);
+  }
 
+  if (typeof targetX !== 'number' || isNaN(targetX) || targetX < 15 || targetX > 285) {
+    throw new Error('Unusable Aliyun vision coordinate: ' + reply);
+  }
+  return targetX;
+}
+
+async function calculateAliyunGap(tabId, msg) {
+  let bgB64 = msg.bgB64 || null;
+  let mime = msg.mime || 'image/png';
+  let naturalWidth = 300;
+  let naturalHeight = 300;
+
+  // Background service worker fetch bypasses all browser CORS restrictions
+  if (!bgB64 && msg.bgUrl) {
+    try {
+      ccLog(tabId, 'ALIYUN_GAP: fetching background image via service worker: ' + msg.bgUrl.slice(0, 80));
+      const resp = await fetch(msg.bgUrl);
+      const blob = await resp.blob();
+      mime = blob.type || 'image/png';
+      const arrayBuffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      bgB64 = btoa(binary);
+    } catch (e) {
+      ccLog(tabId, 'ALIYUN_GAP: background fetch failed: ' + (e.message || e), 'warn');
+    }
+  }
+
+  if (!bgB64) {
+    throw new Error('No background image data provided for Aliyun CAPTCHA');
+  }
+
+  // Obtain natural dimensions if possible
+  try {
+    const bytes = Uint8Array.from(atob(bgB64), (c) => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: mime });
+    const bitmap = await createImageBitmap(blob);
+    naturalWidth = bitmap.width || 300;
+    naturalHeight = bitmap.height || 300;
+    bitmap.close();
+  } catch (_) {}
+
+  // Check if separate slice piece exists with edge mask correlation
+  if (msg.sliceB64 || msg.sliceUrl) {
+    try {
+      const geetestResult = await calculateGeeTestGap(tabId, msg);
+      if (geetestResult && geetestResult.method === 'edge_mask' && geetestResult.gapX > 30) {
+        ccLog(tabId, 'ALIYUN_GAP: solved via slice edge mask: gapX=' + geetestResult.gapX);
+        return { ...geetestResult, method: 'edge_mask' };
+      }
+    } catch (_) {}
+  }
+
+  // Primary High-Precision Vision Model (Qwen Vision)
+  ccLog(tabId, 'ALIYUN_GAP: calling Qwen Vision model for image restoration / slider challenge...');
+  const x = await solveAliyunVision(tabId, bgB64, mime);
+  ccLog(tabId, 'ALIYUN_GAP: Qwen Vision calculated targetX=' + x);
+  return { gapX: x, naturalWidth, naturalHeight, method: 'qwen_vision' };
+}
