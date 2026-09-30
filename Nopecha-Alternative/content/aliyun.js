@@ -45,7 +45,7 @@
 
   function logErr(...args) {
     const line = '[aliyun] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-    console.error('%c[CC-Aliyun]', 'color:#ef4444;font-weight:bold', line);
+    console.warn('%c[CC-Aliyun]', 'color:#ef4444;font-weight:bold', line);
     safeSendMessage({ type: 'LOG', line, level: 'error' });
   }
 
