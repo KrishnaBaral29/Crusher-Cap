@@ -722,37 +722,59 @@ async function dispatchCdpClick(tabId, x, y) {
     }
   }
   try {
-    // move pointer approach
-    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: Math.round(x - 25 - Math.random() * 20),
-      y: Math.round(y - 15 - Math.random() * 15)
-    });
-    await new Promise((r) => setTimeout(r, 60 + Math.random() * 40));
+    // Generate curved humanoid mouse approach (quadratic bezier curve)
+    const startX = Math.round(Math.max(10, x - 70 - Math.random() * 80));
+    const startY = Math.round(Math.max(10, y - 40 - Math.random() * 60));
+    const midX = Math.round((startX + x) / 2 + (Math.random() - 0.5) * 40);
+    const midY = Math.round((startY + y) / 2 + (Math.random() - 0.5) * 30);
+    const steps = 6;
 
-    // move pointer target
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const inv = 1 - t;
+      const curX = Math.round(inv * inv * startX + 2 * inv * t * midX + t * t * x);
+      const curY = Math.round(inv * inv * startY + 2 * inv * t * midY + t * t * y);
+
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: curX,
+        y: curY,
+        buttons: 0
+      }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 18 + Math.random() * 14));
+    }
+
+    // Move to final target coordinates
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x: Math.round(x),
-      y: Math.round(y)
+      y: Math.round(y),
+      buttons: 0
     });
-    await new Promise((r) => setTimeout(r, 80 + Math.random() * 60));
+    await new Promise((r) => setTimeout(r, 60 + Math.random() * 50));
 
-    // dispatch mouse down
+    // Show visual click ring animation
     chrome.tabs.sendMessage(tabId, { type: 'SHOW_CLICK_ANIM', x: Math.round(x), y: Math.round(y) }).catch(() => {});
+
+    // Dispatch mouse pressed with buttons: 1
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mousePressed',
       button: 'left',
+      buttons: 1,
       x: Math.round(x),
       y: Math.round(y),
       clickCount: 1
     });
-    await new Promise((r) => setTimeout(r, 80 + Math.random() * 50));
 
-    // dispatch mouse up
+    // Realistic human hold duration (75-130ms)
+    const holdMs = 75 + Math.floor(Math.random() * 55);
+    await new Promise((r) => setTimeout(r, holdMs));
+
+    // Dispatch mouse released with buttons: 0
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       button: 'left',
+      buttons: 0,
       x: Math.round(x),
       y: Math.round(y),
       clickCount: 1
@@ -770,7 +792,7 @@ async function dispatchCdpClick(tabId, x, y) {
   }
 }
 
-// CDP-based Turnstile coordinate finder — bypasses content script cross-origin limitations
+// CDP-based Turnstile coordinate finder — pierces shadow DOM and iframes via CDP DOM & BoxModel APIs
 async function findTurnstileCoordsCDP(tabId) {
   const target = { tabId };
   try {
@@ -782,83 +804,206 @@ async function findTurnstileCoordsCDP(tabId) {
   }
 
   try {
-    // execute JS in the page context to find Turnstile iframe or checkbox
+    // Strategy 1: Native CDP DOM tree traversal with pierce: true and DOM.getBoxModel
+    try {
+      await chrome.debugger.sendCommand(target, 'DOM.enable');
+      const doc = await chrome.debugger.sendCommand(target, 'DOM.getDocument', { depth: -1, pierce: true });
+
+      if (doc && doc.root) {
+        // Collect candidate nodes: IFRAMEs, checkboxes, challenge containers
+        const candidates = [];
+        function walkTree(node) {
+          if (!node) return;
+          const name = (node.nodeName || '').toUpperCase();
+          const attrs = node.attributes || [];
+          let attrStr = '';
+          for (let i = 0; i < attrs.length; i += 2) {
+            attrStr += (attrs[i] + '=' + attrs[i + 1] + ' ').toLowerCase();
+          }
+
+          const isIframe = name === 'IFRAME';
+          const isTurnstileAttr = /cf-chl|turnstile|challenge-platform|challenges\.cloudflare|ctp-checkbox|challenge-stage|cf-stage/i.test(attrStr);
+          const isCheckboxInput = name === 'INPUT' && attrStr.includes('checkbox');
+
+          if (isIframe || isTurnstileAttr || isCheckboxInput) {
+            candidates.push({
+              nodeId: node.nodeId,
+              nodeName: name,
+              isIframe,
+              isTurnstileAttr,
+              isCheckboxInput,
+              attrStr
+            });
+          }
+
+          if (node.children) {
+            for (let i = 0; i < node.children.length; i++) walkTree(node.children[i]);
+          }
+          if (node.shadowRoots) {
+            for (let i = 0; i < node.shadowRoots.length; i++) walkTree(node.shadowRoots[i]);
+          }
+          if (node.contentDocument) {
+            walkTree(node.contentDocument);
+          }
+        }
+        walkTree(doc.root);
+
+        // Sort candidates: explicit Cloudflare/Turnstile matches first, then any IFRAMEs, then containers
+        candidates.sort((a, b) => {
+          const scoreA = (a.isTurnstileAttr ? 10 : 0) + (a.isIframe ? 5 : 0) + (a.isCheckboxInput ? 8 : 0);
+          const scoreB = (b.isTurnstileAttr ? 10 : 0) + (b.isIframe ? 5 : 0) + (b.isCheckboxInput ? 8 : 0);
+          return scoreB - scoreA;
+        });
+
+        for (const cand of candidates) {
+          try {
+            const box = await chrome.debugger.sendCommand(target, 'DOM.getBoxModel', { nodeId: cand.nodeId }).catch(() => null);
+            if (box && box.model && box.model.width > 0 && box.model.height > 0) {
+              const w = box.model.width;
+              const h = box.model.height;
+              const x = box.model.content[0];
+              const y = box.model.content[1];
+
+              // Direct checkbox input node
+              if (cand.isCheckboxInput && w >= 10 && w <= 45 && h >= 10 && h <= 45) {
+                return {
+                  ok: true,
+                  x: Math.round(x + w / 2),
+                  y: Math.round(y + h / 2),
+                  source: 'cdp-boxmodel-checkbox',
+                  w: Math.round(w),
+                  h: Math.round(h)
+                };
+              }
+
+              // Challenge iframe (typically 300x65, or 120-450px wide, 35-120px tall)
+              if (cand.isIframe && w >= 100 && w <= 500 && h >= 35 && h <= 150) {
+                return {
+                  ok: true,
+                  x: Math.round(x + Math.min(32, Math.max(25, w * 0.11))),
+                  y: Math.round(y + h / 2),
+                  source: 'cdp-boxmodel-iframe',
+                  w: Math.round(w),
+                  h: Math.round(h)
+                };
+              }
+
+              // Turnstile container with direct widget dimensions
+              if (cand.isTurnstileAttr && w >= 120 && w <= 450 && h >= 40 && h <= 120) {
+                return {
+                  ok: true,
+                  x: Math.round(x + 30),
+                  y: Math.round(y + h / 2),
+                  source: 'cdp-boxmodel-container',
+                  w: Math.round(w),
+                  h: Math.round(h)
+                };
+              }
+
+              // Full-width challenge container (widget is 300px centered)
+              if (cand.isTurnstileAttr && w > 450 && h >= 40) {
+                const widgetLeft = x + (w - 300) / 2;
+                return {
+                  ok: true,
+                  x: Math.round(widgetLeft + 30),
+                  y: Math.round(y + h / 2),
+                  source: 'cdp-boxmodel-container-centered',
+                  w: 300,
+                  h: Math.round(h)
+                };
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch (cdpErr) {
+      ccLog(tabId, 'CDP native DOM scan note: ' + (cdpErr.message || cdpErr), 'warn');
+    }
+
+    // Strategy 2: Deep evaluation scan in page context (pierces shadow roots, checks all iframes and visual boxes)
     const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
       expression: `
         (function() {
-          // scan all iframes for Cloudflare challenge patterns
-          var iframes = document.querySelectorAll('iframe');
-          for (var i = 0; i < iframes.length; i++) {
-            var src = (iframes[i].src || '').toLowerCase();
-            if (src.indexOf('challenge-platform') !== -1 ||
-                src.indexOf('challenges.cloudflare') !== -1 ||
-                src.indexOf('turnstile') !== -1 ||
-                src.indexOf('cdn-cgi') !== -1 ||
-                src.indexOf('cf-chl') !== -1) {
-              var rect = iframes[i].getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
+          // Deep collect all elements and open shadow roots
+          var allNodes = [];
+          function collect(root) {
+            if (!root) return;
+            var children = root.querySelectorAll ? root.querySelectorAll('*') : [];
+            for (var i = 0; i < children.length; i++) {
+              var el = children[i];
+              allNodes.push(el);
+              if (el.shadowRoot) collect(el.shadowRoot);
+            }
+          }
+          collect(document);
+
+          // 1. Any visible iframe with Cloudflare/Turnstile patterns or typical widget dimensions
+          for (var i = 0; i < allNodes.length; i++) {
+            var el = allNodes[i];
+            if (el.tagName === 'IFRAME') {
+              var r = el.getBoundingClientRect();
+              if (r.width >= 100 && r.height >= 35) {
                 return JSON.stringify({
                   ok: true,
-                  x: Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11))),
-                  y: Math.round(rect.top + rect.height / 2),
-                  source: 'cdp-iframe-scan',
-                  w: Math.round(rect.width),
-                  h: Math.round(rect.height)
+                  x: Math.round(r.left + Math.min(32, Math.max(25, r.width * 0.11))),
+                  y: Math.round(r.top + r.height / 2),
+                  source: 'cdp-eval-iframe',
+                  w: Math.round(r.width),
+                  h: Math.round(r.height)
                 });
               }
             }
           }
 
-          // fallback: look for challenge containers
+          // 2. Containers: #challenge-stage, #cf-stage, #challenge-form, .cf-turnstile
           var containers = ['#challenge-stage', '#cf-stage', '#challenge-form',
                            '.cf-turnstile', '#cf-chl-widget', '[data-turnstile]',
                            '.ctp-checkbox-container', '#turnstile-wrapper'];
           for (var j = 0; j < containers.length; j++) {
-            var el = document.querySelector(containers[j]);
-            if (el) {
-              // check if it has an iframe child
-              var childIframe = el.querySelector('iframe');
-              if (childIframe) {
-                var cr = childIframe.getBoundingClientRect();
-                if (cr.width > 0 && cr.height > 0) {
+            var cel = document.querySelector(containers[j]);
+            if (cel) {
+              var cr = cel.getBoundingClientRect();
+              if (cr.width > 0 && cr.height > 0) {
+                // If container is full-width (> 450px), widget is centered (300px wide)
+                if (cr.width > 450) {
+                  var wLeft = cr.left + (cr.width - 300) / 2;
                   return JSON.stringify({
                     ok: true,
-                    x: Math.round(cr.left + Math.min(32, Math.max(25, cr.width * 0.11))),
+                    x: Math.round(wLeft + 30),
                     y: Math.round(cr.top + cr.height / 2),
-                    source: 'cdp-container-iframe',
-                    w: Math.round(cr.width),
+                    source: 'cdp-eval-container-centered',
+                    w: 300,
                     h: Math.round(cr.height)
                   });
                 }
-              }
-              // use container itself
-              var cr2 = el.getBoundingClientRect();
-              if (cr2.width > 0 && cr2.height > 0) {
                 return JSON.stringify({
                   ok: true,
-                  x: Math.round(cr2.left + 30),
-                  y: Math.round(cr2.top + cr2.height / 2),
-                  source: 'cdp-container',
-                  w: Math.round(cr2.width),
-                  h: Math.round(cr2.height)
+                  x: Math.round(cr.left + 30),
+                  y: Math.round(cr.top + cr.height / 2),
+                  source: 'cdp-eval-container',
+                  w: Math.round(cr.width),
+                  h: Math.round(cr.height)
                 });
               }
             }
           }
 
-          // last resort: find "Verify you are human" input checkbox
-          var inputs = document.querySelectorAll('input[type="checkbox"]');
-          for (var k = 0; k < inputs.length; k++) {
-            var ir = inputs[k].getBoundingClientRect();
-            if (ir.width > 0 && ir.height > 0) {
-              return JSON.stringify({
-                ok: true,
-                x: Math.round(ir.left + ir.width / 2),
-                y: Math.round(ir.top + ir.height / 2),
-                source: 'cdp-checkbox',
-                w: Math.round(ir.width),
-                h: Math.round(ir.height)
-              });
+          // 3. Visual box matching Turnstile dimensions (~300x65)
+          for (var k = 0; k < allNodes.length; k++) {
+            var nel = allNodes[k];
+            var nr = nel.getBoundingClientRect();
+            if (nr.width >= 240 && nr.width <= 360 && nr.height >= 48 && nr.height <= 85 && nr.top > 50) {
+              var nsig = (nel.id + ' ' + nel.className).toLowerCase();
+              if (nsig.includes('cf') || nsig.includes('chl') || nsig.includes('ctp') || nsig.includes('stage') || nsig.includes('challenge') || nel.querySelector('input, svg, label')) {
+                return JSON.stringify({
+                  ok: true,
+                  x: Math.round(nr.left + 30),
+                  y: Math.round(nr.top + nr.height / 2),
+                  source: 'cdp-eval-visual-box',
+                  w: Math.round(nr.width),
+                  h: Math.round(nr.height)
+                });
+              }
             }
           }
 
@@ -931,7 +1076,7 @@ async function solveTurnstile(tabId, source = 'auto') {
       // Strategy A: request viewport coordinates from content script (page.js)
       let coords = await chrome.tabs.sendMessage(tabId, { type: 'GET_TURNSTILE_COORDS' }, { frameId: 0 }).catch(() => null);
 
-      // Strategy B: CDP fallback — use debugger to find iframe directly in the DOM
+      // Strategy B: CDP fallback — use debugger to find iframe/box directly in the DOM
       if (!coords || !coords.ok) {
         ccLog(tabId, 'TURNSTILE: content-script coords failed — trying CDP DOM scan...', 'warn');
         coords = await findTurnstileCoordsCDP(tabId);
@@ -939,8 +1084,8 @@ async function solveTurnstile(tabId, source = 'auto') {
 
       let clickedCdp = false;
       if (coords && coords.ok && coords.x > 0 && coords.y > 0) {
-        // apply coordinate jitter
-        const offsetX = attempt === 2 ? 4 : (attempt === 3 ? -3 : 0);
+        // apply slight natural coordinate jitter
+        const offsetX = attempt === 2 ? 3 : (attempt === 3 ? -3 : 0);
         const offsetY = attempt === 3 ? 2 : 0;
         const targetX = coords.x + offsetX;
         const targetY = coords.y + offsetY;
@@ -964,10 +1109,10 @@ async function solveTurnstile(tabId, source = 'auto') {
         }
       }
 
-      // monitor token generation
+      // monitor token generation (25 polls * 400ms = 10s wait to allow Wasm PoW to finish)
       ccLog(tabId, 'TURNSTILE: click dispatched, monitoring response token...');
       let passed = false;
-      for (let poll = 0; poll < 15; poll++) {
+      for (let poll = 0; poll < 25; poll++) {
         await new Promise((r) => setTimeout(r, 400));
         const statusResp = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_TURNSTILE_SOLVED' }, { frameId: 0 }).catch(() => null);
         if (statusResp && statusResp.solved) {

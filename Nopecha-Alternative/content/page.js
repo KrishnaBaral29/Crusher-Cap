@@ -204,121 +204,156 @@
     }
   }
 
-  function getTurnstileCoords() {
-    // Strategy 1: Find Turnstile iframe by known selectors (widget-embedded AND standalone challenge pages)
-    const iframeSelectors = [
-      'iframe[id*="cf-chl-widget"]',
-      'div.cf-turnstile iframe',
-      '.cf-turnstile iframe',
-      '#cf-turnstile iframe',
-      'iframe[src*="/cdn-cgi/challenge-platform/"]',
-      '#challenge-stage iframe',
-      '#cf-stage iframe',
-      '#challenge-form iframe',
-      'iframe[src*="challenges.cloudflare.com"]',
-      'iframe[src*="cloudflare.com/cdn-cgi/"]'
-    ];
-    const iframe = document.querySelector(iframeSelectors.join(', '));
-    if (iframe) {
+  function deepQuerySelectorAll(selector, root = document) {
+    const results = [];
+    function search(node) {
+      if (!node) return;
       try {
-        const rCheck = iframe.getBoundingClientRect();
-        if (rCheck.top < 0 || rCheck.bottom > window.innerHeight) {
-          iframe.scrollIntoView({ behavior: 'instant', block: 'center' });
+        if (node.querySelectorAll) {
+          const matches = node.querySelectorAll(selector);
+          for (let i = 0; i < matches.length; i++) {
+            results.push(matches[i]);
+          }
         }
       } catch {}
-      const rect = iframe.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        // click the checkbox area (left side of the widget)
-        const clickX = Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11)));
-        const clickY = Math.round(rect.top + rect.height / 2);
-        return {
-          ok: true,
-          x: clickX,
-          y: clickY,
-          source: 'iframe',
-          rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
-        };
+      if (node.shadowRoot) {
+        search(node.shadowRoot);
       }
-    }
-
-    // Strategy 2: Find Turnstile container div
-    const containerSelectors = [
-      '.cf-turnstile',
-      '#cf-turnstile',
-      '[data-turnstile]',
-      '#challenge-stage',
-      '#cf-stage',
-      '#challenge-form',
-      '.ctp-checkbox-container'
-    ];
-    const container = document.querySelector(containerSelectors.join(', '));
-    if (container) {
-      try {
-        const rCheck = container.getBoundingClientRect();
-        if (rCheck.top < 0 || rCheck.bottom > window.innerHeight) {
-          container.scrollIntoView({ behavior: 'instant', block: 'center' });
-        }
-      } catch {}
-      const rect = container.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const clickX = Math.round(rect.left + 30);
-        const clickY = Math.round(rect.top + rect.height / 2);
-        return {
-          ok: true,
-          x: clickX,
-          y: clickY,
-          source: 'container',
-          rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
-        };
-      }
-    }
-
-    // Strategy 3: Broad scan — find ANY iframe whose src matches Cloudflare challenge patterns
-    const allIframes = document.querySelectorAll('iframe');
-    for (const f of allIframes) {
-      const src = (f.src || '').toLowerCase();
-      if (src.includes('challenge-platform') || src.includes('challenges.cloudflare') || src.includes('turnstile') || src.includes('cdn-cgi')) {
+      if (typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot) {
         try {
-          const rCheck = f.getBoundingClientRect();
-          if (rCheck.top < 0 || rCheck.bottom > window.innerHeight) {
-            f.scrollIntoView({ behavior: 'instant', block: 'center' });
+          const closedSr = chrome.dom.openOrClosedShadowRoot(node);
+          if (closedSr && closedSr !== node.shadowRoot) {
+            search(closedSr);
           }
         } catch {}
-        const rect = f.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          const clickX = Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11)));
-          const clickY = Math.round(rect.top + rect.height / 2);
-          return {
-            ok: true,
-            x: clickX,
-            y: clickY,
-            source: 'broad-iframe-scan',
-            rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
-          };
-        }
+      }
+      const children = node.children || [];
+      for (let i = 0; i < children.length; i++) {
+        search(children[i]);
+      }
+    }
+    search(root);
+    return results;
+  }
+
+  function getTurnstileCoords() {
+    // Strategy 1: Deep scan for all IFRAME elements across light DOM and shadow roots
+    const allIframes = deepQuerySelectorAll('iframe', document);
+
+    // First pass: iframes matching known challenge keywords
+    for (const f of allIframes) {
+      const src = (f.src || '').toLowerCase();
+      const id = (f.id || '').toLowerCase();
+      const name = (f.name || '').toLowerCase();
+      const title = (f.title || '').toLowerCase();
+      const isCf = src.includes('challenge-platform') || src.includes('challenges.cloudflare') ||
+                   src.includes('turnstile') || src.includes('cdn-cgi') ||
+                   id.includes('cf-chl') || name.includes('cf-chl') || title.includes('cloudflare');
+      if (isCf) {
+        try {
+          const r = f.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            return {
+              ok: true,
+              x: Math.round(r.left + Math.min(32, Math.max(25, r.width * 0.11))),
+              y: Math.round(r.top + r.height / 2),
+              source: 'deep-cf-iframe',
+              rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
+            };
+          }
+        } catch {}
       }
     }
 
-    // Strategy 4: Look for the visible "Verify you are human" checkbox label text
-    const labels = document.querySelectorAll('label, span, div');
-    for (const el of labels) {
-      if (el.textContent && /verify you are human/i.test(el.textContent.trim()) && el.textContent.trim().length < 60) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          // click the checkbox area (left side before the text)
-          const clickX = Math.round(rect.left - 10);
-          const clickY = Math.round(rect.top + rect.height / 2);
-          if (clickX > 0 && clickY > 0) {
+    // Second pass: ANY visible iframe with typical Turnstile dimensions (~100-450px wide, ~35-120px tall)
+    for (const f of allIframes) {
+      try {
+        const r = f.getBoundingClientRect();
+        if (r.width >= 100 && r.width <= 450 && r.height >= 35 && r.height <= 120) {
+          return {
+            ok: true,
+            x: Math.round(r.left + Math.min(32, Math.max(25, r.width * 0.11))),
+            y: Math.round(r.top + r.height / 2),
+            source: 'deep-sized-iframe',
+            rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
+          };
+        }
+      } catch {}
+    }
+
+    // Strategy 2: Check known container elements
+    const containerSelectors = [
+      '#challenge-stage', '#cf-stage', '#challenge-form',
+      '.cf-turnstile', '#cf-turnstile', '[data-turnstile]',
+      '.ctp-checkbox-container'
+    ];
+    for (const sel of containerSelectors) {
+      const containers = deepQuerySelectorAll(sel, document);
+      for (const container of containers) {
+        try {
+          const r = container.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            // Check if it contains a child with widget dimensions
+            const allChildren = deepQuerySelectorAll('*', container);
+            for (const child of allChildren) {
+              const cr = child.getBoundingClientRect();
+              if (cr.width >= 120 && cr.width <= 420 && cr.height >= 40 && cr.height <= 100) {
+                return {
+                  ok: true,
+                  x: Math.round(cr.left + 30),
+                  y: Math.round(cr.top + cr.height / 2),
+                  source: 'container-sized-child',
+                  rect: { left: Math.round(cr.left), top: Math.round(cr.top), width: Math.round(cr.width), height: Math.round(cr.height) }
+                };
+              }
+            }
+
+            // If the container itself has typical widget dimensions:
+            if (r.width >= 120 && r.width <= 450 && r.height >= 40 && r.height <= 120) {
+              return {
+                ok: true,
+                x: Math.round(r.left + 30),
+                y: Math.round(r.top + r.height / 2),
+                source: 'container-direct',
+                rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
+              };
+            }
+
+            // If the container is full-width (like #challenge-stage or #challenge-form on interstitial pages):
+            // The challenge widget (300px wide) is centered inside it
+            if (r.width > 450 && r.height >= 40) {
+              const widgetLeft = r.left + (r.width - 300) / 2;
+              return {
+                ok: true,
+                x: Math.round(widgetLeft + 30),
+                y: Math.round(r.top + r.height / 2),
+                source: 'container-fullwidth-centered',
+                rect: { left: Math.round(widgetLeft), top: Math.round(r.top), width: 300, height: Math.round(r.height) }
+              };
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // Strategy 3: Visual inspection — look for ANY element that has Turnstile widget box dimensions (~300x65)
+    const allElements = deepQuerySelectorAll('div, section, article', document);
+    for (const el of allElements) {
+      try {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 240 && r.width <= 360 && r.height >= 50 && r.height <= 85 && r.top > 50) {
+          const sig = (el.id + ' ' + el.className).toLowerCase();
+          if (sig.includes('cf') || sig.includes('chl') || sig.includes('ctp') || sig.includes('stage') || sig.includes('challenge') || el.querySelector('input, svg, label')) {
             return {
               ok: true,
-              x: clickX,
-              y: clickY,
-              source: 'text-label-scan',
-              rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+              x: Math.round(r.left + 30),
+              y: Math.round(r.top + r.height / 2),
+              source: 'deep-visual-box',
+              rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
             };
           }
         }
-      }
+      } catch {}
     }
 
     return { ok: false, error: 'Turnstile element not visible or not found' };
@@ -567,11 +602,23 @@
       const tokenInput = document.querySelector(
         'input[name="cf-turnstile-response"], [name="cf-turnstile-response"]'
       );
-      const isSolved = !!(tokenInput && tokenInput.value && tokenInput.value.length > 20);
+      const isTokenSolved = !!(tokenInput && tokenInput.value && tokenInput.value.length > 20);
+
+      // Check visual success elements
+      const successEl = document.querySelector(
+        '#challenge-success, .ctp-checkbox-checked, [data-state="success"], svg.ctp-checkbox-checked'
+      );
+      const isSuccessState = !!(successEl && (successEl.offsetWidth > 0 || successEl.offsetHeight > 0));
+
+      // Check page text indicators
+      const bodyText = (document.body && document.body.innerText) || '';
+      const isTextSolved = /success|verified/i.test(bodyText) && !/verify you are human/i.test(bodyText);
+
+      const isSolved = isTokenSolved || isSuccessState || isTextSolved;
       sendResponse({
         ok: true,
         solved: isSolved,
-        token: isSolved ? tokenInput.value : null
+        token: isTokenSolved ? tokenInput.value : (isSolved ? 'verified' : null)
       });
       return true;
     }

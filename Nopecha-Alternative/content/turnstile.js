@@ -149,11 +149,14 @@
         if (cont && isVisible(cont)) results.container = cont;
       }
 
-      // traverse nested shadow roots
+      // traverse nested shadow roots (both open and closed)
       const children = node.querySelectorAll('*');
       for (const child of children) {
-        if (child.shadowRoot) {
-          scan(child.shadowRoot);
+        const sr = (typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot)
+          ? chrome.dom.openOrClosedShadowRoot(child)
+          : child.shadowRoot;
+        if (sr) {
+          scan(sr);
         }
       }
     }
