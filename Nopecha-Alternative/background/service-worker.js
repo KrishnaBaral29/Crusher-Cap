@@ -3476,7 +3476,7 @@ async function solveGeeTestVision(tabId, b64, mime) {
   ];
   const reply = await xkiroChat(tabId, messages, { maxTokens: 16, timeoutMs: 20000 });
   const num = parseInt(String(reply).replace(/[^0-9]/g, ''), 10);
-  if (isNaN(num) || num < 20 || num > 280) {
+  if (isNaN(num) || num < 10 || num > 500) {
     throw new Error('Unusable vision coordinate: ' + reply);
   }
   return num;

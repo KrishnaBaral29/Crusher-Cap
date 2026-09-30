@@ -96,202 +96,6 @@
 
   // --- Element Discovery ---
 
-  function findChallengeContainer() {
-    // 1. Specific Aliyun 2.0 / Baxia selectors
-    const specificSelectors = [
-      '[id*="aliyunCaptcha"]',
-      '[class*="aliyunCaptcha"]',
-      '[id*="aliyun-captcha"]',
-      '[class*="aliyun-captcha"]',
-      '[class*="baxia"]',
-      '#captcha-element',
-      '[class*="nc_scale"]',
-      '.nc_container'
-    ];
-
-    for (const sel of specificSelectors) {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
-        if (isVisible(el)) {
-          // Find dialog parent if wrapped in modal
-          const modalParent = el.closest('[role="dialog"], .modal, [class*="dialog"], [class*="modal"]');
-          return modalParent || el;
-        }
-      }
-    }
-
-    // 2. Text signatures inside dialogs / modals / cards
-    const containers = document.querySelectorAll('div, section, [role="dialog"], .modal, [class*="dialog"], [class*="modal"]');
-    for (const c of containers) {
-      if (!isVisible(c)) continue;
-      if (c === document.body || c === document.documentElement) continue;
-
-      const r = c.getBoundingClientRect();
-      if (r.width < 180 || r.height < 140 || r.width > 750 || r.height > 850) continue;
-
-      const txt = (c.textContent || '');
-      if (
-        txt.includes('CertifyId') ||
-        txt.includes('drag the slider to restore the complete image') ||
-        txt.includes('Please complete security verification') ||
-        txt.includes('请完成安全验证') ||
-        txt.includes('向右滑动验证') ||
-        txt.includes('拖动滑块完成拼图') ||
-        txt.includes('请拖动滑块') ||
-        txt.includes('向右滑动')
-      ) {
-        return c;
-      }
-    }
-
-    return null;
-  }
-
-  function findSliderHandle(scope) {
-    const root = scope || document;
-
-    // 1. Match handle containing arrow text ">>", "»", ">", "→"
-    const allDivs = root.querySelectorAll('div, span, button, [role="slider"]');
-    for (const el of allDivs) {
-      if (!isVisible(el)) continue;
-      const txt = (el.textContent || '').trim();
-      if (txt === '>>' || txt === '»' || txt === '>' || txt === '→') {
-        const r = el.getBoundingClientRect();
-        if (r.width >= 20 && r.width <= 85 && r.height >= 20 && r.height <= 85) {
-          return el;
-        }
-      }
-    }
-
-    // 2. Class name matches
-    const selectors = [
-      '.btn_slide',
-      '[class*="btn_slide"]',
-      '[class*="sliding-slider"]',
-      '[class*="slider-btn"]',
-      '[class*="slider_btn"]',
-      '[class*="slider_button"]',
-      '[class*="slider-handle"]',
-      '[class*="slider-thumb"]',
-      '.nc_iconfont.btn_slide',
-      '[role="slider"]',
-      '.slider',
-      '[class*="handler"]'
-    ];
-
-    for (const sel of selectors) {
-      const els = root.querySelectorAll(sel);
-      for (const el of els) {
-        if (isVisible(el)) {
-          const r = el.getBoundingClientRect();
-          if (r.width >= 20 && r.width <= 85 && r.height >= 20 && r.height <= 85) {
-            return el;
-          }
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function findSliderTrack(sliderHandle, scope) {
-    if (sliderHandle) {
-      let p = sliderHandle.parentElement;
-      while (p && p !== (scope || document.body)) {
-        const r = p.getBoundingClientRect();
-        const hr = sliderHandle.getBoundingClientRect();
-        if (r.width >= hr.width * 2.2 && r.width >= 160 && r.height >= hr.height * 0.7 && r.height <= hr.height * 2.8) {
-          return p;
-        }
-        p = p.parentElement;
-      }
-    }
-
-    const root = scope || document;
-    const trackSelectors = [
-      '.nc_scale',
-      '[class*="nc_scale"]',
-      '[class*="sliding-track"]',
-      '[class*="slider-track"]',
-      '[class*="slide-track"]',
-      '[class*="slidetounlock"]',
-      '[class*="scale_text"]'
-    ];
-
-    for (const sel of trackSelectors) {
-      const el = root.querySelector(sel);
-      if (el && isVisible(el)) return el;
-    }
-
-    return null;
-  }
-
-  function findPuzzleImages(scope) {
-    const root = scope || document;
-    const mediaElements = Array.from(root.querySelectorAll('canvas, img, div[style*="background-image"]')).filter(isVisible);
-
-    const sorted = mediaElements
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        return { el, width: r.width, height: r.height, area: r.width * r.height, top: r.top, left: r.left };
-      })
-      .filter((item) => item.width > 20 && item.height > 20);
-
-    sorted.sort((a, b) => b.area - a.area);
-
-    let bg = null;
-    let slice = null;
-
-    // Largest media element is the background image
-    const bgCandidate = sorted.find((item) => item.width >= 160 && item.height >= 80);
-    if (bgCandidate) {
-      bg = bgCandidate.el;
-
-      // Slice candidate is a smaller media element positioned in or over the background
-      const sliceCandidate = sorted.find(
-        (item) =>
-          item.el !== bg &&
-          item.width >= 24 &&
-          item.width <= 110 &&
-          item.height >= 24 &&
-          item.height <= 110 &&
-          item.top >= bgCandidate.top - 30 &&
-          item.top <= bgCandidate.top + bgCandidate.height + 10
-      );
-
-      if (sliceCandidate) {
-        slice = sliceCandidate.el;
-      }
-    }
-
-    if (!bg) {
-      const bgSel = root.querySelector('[class*="sliding-img"], [class*="bg-img"], canvas:not([class*="slice"])');
-      if (bgSel && isVisible(bgSel)) bg = bgSel;
-    }
-    if (!slice) {
-      const sliceSel = root.querySelector('[class*="sliding-slice"], [class*="slice"], canvas[class*="slice"]');
-      if (sliceSel && isVisible(sliceSel)) slice = sliceSel;
-    }
-
-    return { bg, slice };
-  }
-
-  function findRefreshButton(scope) {
-    const root = scope || document;
-    const btn = root.querySelector([
-      '[class*="refresh"]',
-      '[class*="reload"]',
-      '[class*="reset"]',
-      '[aria-label*="refresh" i]',
-      '[aria-label*="reload" i]',
-      '[title*="refresh" i]',
-      '[title*="reload" i]',
-      '[title*="换一张"]',
-      '[aria-label*="换一张"]'
-    ].join(', '));
-    return btn && isVisible(btn) ? btn : null;
-  }
-
   function extractCertifyId(scope) {
     const text = ((scope && scope.textContent) || document.body.textContent || '');
     const m = text.match(/CertifyId:\s*([a-zA-Z0-9_-]+)/i);
@@ -315,22 +119,195 @@
   }
 
   function findAliyunChallenge() {
-    const container = findChallengeContainer();
-    if (!container) return { found: false };
+    let sliderHandle = null;
+    let sliderTrack = null;
+    let bg = null;
+    let slice = null;
+    let refreshBtn = null;
+    let container = null;
 
-    const sliderHandle = findSliderHandle(container);
-    const sliderTrack = findSliderTrack(sliderHandle, container);
-    const { bg, slice } = findPuzzleImages(container);
-    const refreshBtn = findRefreshButton(container);
-    const certifyId = extractCertifyId(container);
+    const allElements = Array.from(document.querySelectorAll('*')).filter(isVisible);
 
+    // 1. Find slider handle by text, arrow symbol, or specific slider button classes
+    for (const el of allElements) {
+      const txt = (el.textContent || '').trim();
+      const cls = String(el.className || '');
+      const isArrow = txt === '>>' || txt === '»' || txt === '>' || txt === '→' || txt === '›';
+      const isSlideClass = (
+        cls.includes('btn_slide') ||
+        cls.includes('sliding-slider') ||
+        cls.includes('slider-btn') ||
+        cls.includes('slider_btn') ||
+        cls.includes('slider_button') ||
+        cls.includes('slider-handle') ||
+        cls.includes('nc_iconfont') ||
+        el.getAttribute('role') === 'slider'
+      );
+
+      if (isArrow || isSlideClass) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 16 && r.width <= 90 && r.height >= 16 && r.height <= 90) {
+          sliderHandle = el;
+          break;
+        }
+      }
+    }
+
+    // 2. Find slider track (container with prompt text or class nc_scale / track)
+    for (const el of allElements) {
+      const txt = (el.textContent || '');
+      const cls = String(el.className || '');
+      const isTrackText = (
+        txt.includes('drag the slider to restore the complete image') ||
+        txt.includes('Please drag the slider') ||
+        txt.includes('drag the slider') ||
+        txt.includes('向右滑动验证') ||
+        txt.includes('向右滑动') ||
+        txt.includes('拖动滑块')
+      );
+      const isTrackClass = (
+        cls.includes('nc_scale') ||
+        cls.includes('sliding-track') ||
+        cls.includes('slider-track') ||
+        cls.includes('scale_text') ||
+        cls.includes('slidetounlock')
+      );
+
+      if (isTrackText || isTrackClass) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 140 && r.width <= 500 && r.height >= 18 && r.height <= 85) {
+          sliderTrack = el;
+          // If handle not found yet, search inside or next to this track
+          if (!sliderHandle) {
+            const candidates = (el.parentElement || el).querySelectorAll('div, span, button, a, [role="slider"]');
+            for (const c of candidates) {
+              if (c === el) continue;
+              if (!isVisible(c)) continue;
+              const cr = c.getBoundingClientRect();
+              if (cr.width >= 16 && cr.width <= 90 && cr.height >= 16 && cr.height <= 90) {
+                sliderHandle = c;
+                break;
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // If track not found yet, but handle found, deduce track from handle ancestors
+    if (sliderHandle && !sliderTrack) {
+      let p = sliderHandle.parentElement;
+      const hr = sliderHandle.getBoundingClientRect();
+      while (p && p !== document.body && p !== document.documentElement) {
+        const pr = p.getBoundingClientRect();
+        if (pr.width >= hr.width * 2 && pr.width >= 140 && pr.height >= hr.height * 0.7 && pr.height <= hr.height * 2.8) {
+          sliderTrack = p;
+          break;
+        }
+        p = p.parentElement;
+      }
+    }
+
+    // 3. Find the challenge dialog container (walk up from track/handle)
+    const anchor = sliderTrack || sliderHandle;
+    if (anchor) {
+      let p = anchor.parentElement;
+      while (p && p !== document.body && p !== document.documentElement) {
+        const pr = p.getBoundingClientRect();
+        if (pr.width >= 200 && pr.width <= 650 && pr.height >= 200 && pr.height <= 750) {
+          container = p;
+          let gp = p.parentElement;
+          if (gp && gp !== document.body && gp !== document.documentElement) {
+            const gpr = gp.getBoundingClientRect();
+            if (gpr.width >= 200 && gpr.width <= 650 && gpr.height >= 200 && gpr.height <= 750 && gpr.width >= pr.width) {
+              container = gp;
+            }
+          }
+          break;
+        }
+        p = p.parentElement;
+      }
+    }
+
+    // Fallback container check via specific classes / text
+    if (!container) {
+      const specific = document.querySelector(
+        '[id*="aliyunCaptcha"], [class*="aliyunCaptcha"], [id*="aliyun-captcha"], [class*="aliyun-captcha"], [class*="baxia"], #captcha-element'
+      );
+      if (specific && isVisible(specific)) {
+        container = specific;
+      }
+    }
+
+    // 4. Find the Puzzle Background & Slice Images
+    const scope = container || document;
+    const mediaElements = Array.from(scope.querySelectorAll('canvas, img, div[style*="background-image"], div[style*="background:"]')).filter(isVisible);
+
+    const candidates = mediaElements.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { el, width: r.width, height: r.height, top: r.top, left: r.left, bottom: r.bottom, area: r.width * r.height };
+    }).filter((item) => item.width >= 20 && item.height >= 20);
+
+    // If track is known, the puzzle image is directly above the track
+    if (sliderTrack) {
+      const tr = sliderTrack.getBoundingClientRect();
+      const above = candidates.filter((item) => item.width >= 150 && item.height >= 75 && item.bottom <= tr.top + 50);
+      if (above.length > 0) {
+        above.sort((a, b) => b.area - a.area);
+        bg = above[0].el;
+      }
+    }
+
+    // Fallback for background: largest candidate matching puzzle dimensions
+    if (!bg) {
+      const large = candidates.filter((item) => item.width >= 150 && item.height >= 75 && item.width <= 500 && item.height <= 400);
+      if (large.length > 0) {
+        large.sort((a, b) => b.area - a.area);
+        bg = large[0].el;
+      }
+    }
+
+    // Find cutout slice piece (overlaps or is placed near the background)
+    if (bg) {
+      const bgr = bg.getBoundingClientRect();
+      const sliceCandidates = candidates.filter((item) => {
+        if (item.el === bg) return false;
+        return (
+          item.width >= 18 && item.width <= 120 &&
+          item.height >= 18 && item.height <= 120 &&
+          item.top >= bgr.top - 30 &&
+          item.bottom <= bgr.bottom + 30
+        );
+      });
+      if (sliceCandidates.length > 0) {
+        slice = sliceCandidates[0].el;
+      }
+    }
+
+    // 5. Find refresh button
+    if (scope) {
+      refreshBtn = scope.querySelector([
+        '[class*="refresh"]',
+        '[class*="reload"]',
+        '[class*="reset"]',
+        '[aria-label*="refresh" i]',
+        '[aria-label*="reload" i]',
+        '[title*="refresh" i]',
+        '[title*="reload" i]',
+        '[title*="换一张"]',
+        '[aria-label*="换一张"]'
+      ].join(', '));
+    }
+
+    const certifyId = extractCertifyId(container || document);
     const isReady = !!(sliderHandle && bg && isVisible(sliderHandle) && isVisible(bg));
 
     return {
-      found: true,
-      container,
+      found: !!(sliderHandle || sliderTrack || container),
+      container: container || (sliderTrack ? sliderTrack.parentElement : null),
       sliderHandle,
-      sliderTrack,
+      sliderTrack: sliderTrack || (sliderHandle ? sliderHandle.parentElement : null),
       bg,
       slice,
       refreshBtn,
@@ -341,34 +318,43 @@
 
   // --- Image Extraction & Gap Calculation ---
 
-  function extractImageData(el) {
+  async function extractImageData(el) {
     if (!el) return null;
+
+    // 1. Canvas export
     if (el.tagName === 'CANVAS') {
       try {
         const b64 = el.toDataURL('image/png').split(',')[1];
-        if (b64 && b64.length > 100) return { b64, mime: 'image/png' };
-      } catch {}
+        if (b64 && b64.length > 50) return { b64, mime: 'image/png' };
+      } catch (e) {
+        log('Canvas toDataURL tainted or error:', e.message);
+      }
     }
+
+    // 2. Image tag
     if (el.tagName === 'IMG') {
       if (el.src && el.src.startsWith('data:image/')) {
         const parts = el.src.split(',');
         const mimeMatch = el.src.match(/data:([^;]+);/);
         return { b64: parts[1], mime: mimeMatch ? mimeMatch[1] : 'image/png', url: el.src };
       }
-      if (el.src && /^https?:\/\//i.test(el.src)) {
-        return { url: el.src };
-      }
       try {
         const c = document.createElement('canvas');
-        c.width = el.naturalWidth || el.width || 300;
-        c.height = el.naturalHeight || el.height || 200;
+        c.width = el.naturalWidth || el.width || Math.round(el.getBoundingClientRect().width);
+        c.height = el.naturalHeight || el.height || Math.round(el.getBoundingClientRect().height);
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(el, 0, 0);
         const b64 = c.toDataURL('image/png').split(',')[1];
-        return { b64, mime: 'image/png' };
-      } catch {}
+        if (b64 && b64.length > 50) return { b64, mime: 'image/png' };
+      } catch (e) {
+        log('Image canvas draw error (CORS):', e.message);
+      }
+      if (el.src && /^https?:\/\//i.test(el.src)) {
+        return { url: el.src };
+      }
     }
 
+    // 3. CSS Background-Image
     const style = window.getComputedStyle(el);
     const bgImg = style.backgroundImage || '';
     const match = bgImg.match(/url\(["']?([^"']+)["']?\)/);
@@ -379,7 +365,37 @@
         const mimeMatch = u.match(/data:([^;]+);/);
         return { b64: parts[1], mime: mimeMatch ? mimeMatch[1] : 'image/png', url: u };
       }
-      return { url: u };
+      if (/^https?:\/\//i.test(u)) {
+        return { url: u };
+      }
+    }
+
+    // 4. Bulletproof Fallback: Capture exact element rectangle via background captureVisibleTab
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width > 20 && r.height > 20) {
+        const resp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            {
+              type: 'CAPTURE_ELEMENT_RECT',
+              rect: {
+                x: Math.round(r.left),
+                y: Math.round(r.top),
+                width: Math.round(r.width),
+                height: Math.round(r.height),
+                dpr: window.devicePixelRatio || 1
+              }
+            },
+            resolve
+          );
+        });
+        if (resp && resp.ok && resp.b64) {
+          log('Element visual crop captured via background tab capture ✓');
+          return { b64: resp.b64, mime: 'image/png' };
+        }
+      }
+    } catch (e) {
+      log('CAPTURE_ELEMENT_RECT fallback error:', e.message);
     }
 
     return null;
@@ -387,18 +403,33 @@
 
   async function waitForCaptchaToLoad(maxWaitMs = 10000) {
     const start = Date.now();
+    let lastLog = 0;
+
     while (Date.now() - start < maxWaitMs) {
       const ch = findAliyunChallenge();
+
       if (ch.isReady) {
-        const bgData = extractImageData(ch.bg);
+        const bgRect = ch.bg.getBoundingClientRect();
+        const handleRect = ch.sliderHandle.getBoundingClientRect();
+        log(`Elements located: handle=${ch.sliderHandle.tagName}.${ch.sliderHandle.className} (${Math.round(handleRect.width)}x${Math.round(handleRect.height)}) bg=${ch.bg.tagName} (${Math.round(bgRect.width)}x${Math.round(bgRect.height)})`);
+
+        const bgData = await extractImageData(ch.bg);
         if (bgData && (bgData.b64 || bgData.url)) {
           return { ready: true, challenge: ch, bgData };
         }
       }
-      await sleep(200);
+
+      if (Date.now() - lastLog > 2000) {
+        log(`Waiting for elements... handle=${!!ch.sliderHandle} track=${!!ch.sliderTrack} bg=${!!ch.bg} ready=${ch.isReady}`);
+        lastLog = Date.now();
+      }
+
+      await sleep(250);
     }
+
     const finalCh = findAliyunChallenge();
-    return { ready: false, challenge: finalCh, bgData: extractImageData(finalCh.bg) };
+    const finalBgData = finalCh.bg ? await extractImageData(finalCh.bg) : null;
+    return { ready: false, challenge: finalCh, bgData: finalBgData };
   }
 
   async function requestGapCalculation(bgData, sliceData, relativeY) {
@@ -550,8 +581,8 @@
         if (thisSolveId !== activeSolveId) return false;
 
         log('solve attempt ' + attempts + '/' + MAX_ATTEMPTS);
-
         log('waiting for captcha elements & images to load completely...');
+
         const loadResult = await waitForCaptchaToLoad(10000);
         if (thisSolveId !== activeSolveId) return false;
 
@@ -581,7 +612,7 @@
         const sliceRect = ch.slice ? ch.slice.getBoundingClientRect() : null;
         const relativeY = sliceRect ? Math.round(sliceRect.top - bgRect.top) : 0;
 
-        const sliceData = ch.slice ? extractImageData(ch.slice) : null;
+        const sliceData = ch.slice ? await extractImageData(ch.slice) : null;
         const gapResult = await requestGapCalculation(loadResult.bgData, sliceData, relativeY);
 
         if (!gapResult || typeof gapResult.gapX !== 'number') {
@@ -597,7 +628,7 @@
 
         // Geometry & travel scaling
         const naturalWidth = gapResult.naturalWidth || (ch.bg.tagName === 'CANVAS' ? ch.bg.width : 300);
-        const scale = bgRect.width > 0 ? bgRect.width / naturalWidth : 1;
+        const scale = bgRect.width > 0 ? (bgRect.width / naturalWidth) : 1;
         const gapCssX = Math.round(gapResult.gapX * scale);
 
         const btnRect = ch.sliderHandle.getBoundingClientRect();
