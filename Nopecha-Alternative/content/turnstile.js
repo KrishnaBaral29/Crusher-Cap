@@ -324,9 +324,14 @@
 
     const settings = await getSettings();
     if (!settings.enabled || settings.solve_turnstile === false) {
-      log('Turnstile solver disabled in extension settings');
+      // only log once to prevent spam
+      if (!attemptSolve._disabledLogged) {
+        log('Turnstile solver disabled in extension settings');
+        attemptSolve._disabledLogged = true;
+      }
       return;
     }
+    attemptSolve._disabledLogged = false;
 
     const elements = findTurnstileElements();
 

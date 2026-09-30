@@ -116,10 +116,13 @@
 
   function findTurnstile() {
     const iframe = document.querySelector(
-      'iframe[id*="cf-chl-widget"], div.cf-turnstile iframe, .cf-turnstile iframe, #cf-turnstile iframe, iframe[src*="/cdn-cgi/challenge-platform/"]'
+      'iframe[id*="cf-chl-widget"], div.cf-turnstile iframe, .cf-turnstile iframe, #cf-turnstile iframe, ' +
+      'iframe[src*="/cdn-cgi/challenge-platform/"], #challenge-stage iframe, #cf-stage iframe, ' +
+      'iframe[src*="challenges.cloudflare.com"], iframe[src*="cloudflare.com/cdn-cgi/"]'
     );
     const widget = document.querySelector(
-      '.cf-turnstile, [data-turnstile], [name="cf-turnstile-response"], #cf-chl-widget'
+      '.cf-turnstile, [data-turnstile], [name="cf-turnstile-response"], #cf-chl-widget, ' +
+      '#challenge-stage, #cf-stage, #challenge-form'
     );
     if (iframe || widget) {
       let sitekey = null;
@@ -135,6 +138,7 @@
     }
     return { found: false, sitekey: null };
   }
+
 
   let turnstileDetected = false;
   let turnstileTokenObserved = false;
@@ -201,9 +205,20 @@
   }
 
   function getTurnstileCoords() {
-    const iframe = document.querySelector(
-      'iframe[id*="cf-chl-widget"], div.cf-turnstile iframe, .cf-turnstile iframe, #cf-turnstile iframe, iframe[src*="/cdn-cgi/challenge-platform/"]'
-    );
+    // Strategy 1: Find Turnstile iframe by known selectors (widget-embedded AND standalone challenge pages)
+    const iframeSelectors = [
+      'iframe[id*="cf-chl-widget"]',
+      'div.cf-turnstile iframe',
+      '.cf-turnstile iframe',
+      '#cf-turnstile iframe',
+      'iframe[src*="/cdn-cgi/challenge-platform/"]',
+      '#challenge-stage iframe',
+      '#cf-stage iframe',
+      '#challenge-form iframe',
+      'iframe[src*="challenges.cloudflare.com"]',
+      'iframe[src*="cloudflare.com/cdn-cgi/"]'
+    ];
+    const iframe = document.querySelector(iframeSelectors.join(', '));
     if (iframe) {
       try {
         const rCheck = iframe.getBoundingClientRect();
@@ -213,18 +228,30 @@
       } catch {}
       const rect = iframe.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        // compute turnstile click coords
+        // click the checkbox area (left side of the widget)
         const clickX = Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11)));
         const clickY = Math.round(rect.top + rect.height / 2);
         return {
           ok: true,
           x: clickX,
           y: clickY,
+          source: 'iframe',
           rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
         };
       }
     }
-    const container = document.querySelector('.cf-turnstile, #cf-turnstile, [data-turnstile]');
+
+    // Strategy 2: Find Turnstile container div
+    const containerSelectors = [
+      '.cf-turnstile',
+      '#cf-turnstile',
+      '[data-turnstile]',
+      '#challenge-stage',
+      '#cf-stage',
+      '#challenge-form',
+      '.ctp-checkbox-container'
+    ];
+    const container = document.querySelector(containerSelectors.join(', '));
     if (container) {
       try {
         const rCheck = container.getBoundingClientRect();
@@ -240,12 +267,63 @@
           ok: true,
           x: clickX,
           y: clickY,
+          source: 'container',
           rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
         };
       }
     }
+
+    // Strategy 3: Broad scan — find ANY iframe whose src matches Cloudflare challenge patterns
+    const allIframes = document.querySelectorAll('iframe');
+    for (const f of allIframes) {
+      const src = (f.src || '').toLowerCase();
+      if (src.includes('challenge-platform') || src.includes('challenges.cloudflare') || src.includes('turnstile') || src.includes('cdn-cgi')) {
+        try {
+          const rCheck = f.getBoundingClientRect();
+          if (rCheck.top < 0 || rCheck.bottom > window.innerHeight) {
+            f.scrollIntoView({ behavior: 'instant', block: 'center' });
+          }
+        } catch {}
+        const rect = f.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const clickX = Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11)));
+          const clickY = Math.round(rect.top + rect.height / 2);
+          return {
+            ok: true,
+            x: clickX,
+            y: clickY,
+            source: 'broad-iframe-scan',
+            rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+          };
+        }
+      }
+    }
+
+    // Strategy 4: Look for the visible "Verify you are human" checkbox label text
+    const labels = document.querySelectorAll('label, span, div');
+    for (const el of labels) {
+      if (el.textContent && /verify you are human/i.test(el.textContent.trim()) && el.textContent.trim().length < 60) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          // click the checkbox area (left side before the text)
+          const clickX = Math.round(rect.left - 10);
+          const clickY = Math.round(rect.top + rect.height / 2);
+          if (clickX > 0 && clickY > 0) {
+            return {
+              ok: true,
+              x: clickX,
+              y: clickY,
+              source: 'text-label-scan',
+              rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+            };
+          }
+        }
+      }
+    }
+
     return { ok: false, error: 'Turnstile element not visible or not found' };
   }
+
 
   function requestAutoTurnstile() {
     if (pageSettings.enabled === false || pageSettings.solve_turnstile === false) return;

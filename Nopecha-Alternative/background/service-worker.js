@@ -824,20 +824,20 @@ async function solveTurnstile(tabId, source = 'auto') {
         const targetX = coords.x + offsetX;
         const targetY = coords.y + offsetY;
 
-        ccLog(tabId, 'TURNSTILE: acquired widget coords (' + targetX + ', ' + targetY + ') — dispatching native CDP hardware click...');
+        ccLog(tabId, 'TURNSTILE: acquired widget coords via [' + (coords.source || 'unknown') + '] (' + targetX + ', ' + targetY + ') — dispatching native CDP hardware click...');
         clickedCdp = await dispatchCdpClick(tabId, targetX, targetY);
         if (clickedCdp) {
           ccLog(tabId, 'TURNSTILE: native CDP click successfully dispatched');
         }
       } else {
-        ccLog(tabId, 'TURNSTILE: coordinates unavailable from main page (' + ((coords && coords.error) || 'no coords') + ')', 'warn');
+        ccLog(tabId, 'TURNSTILE: coordinates unavailable from main page (' + ((coords && coords.error) || 'no coords') + ') — trying frame-level fallback', 'warn');
       }
 
-      // broadcast trigger message
+      // broadcast trigger message to all Cloudflare challenge frames
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
       if (frames) {
         for (const f of frames) {
-          if (/cloudflare\.com/.test(f.url)) {
+          if (/cloudflare\.com|challenge-platform|cdn-cgi|turnstile/.test(f.url)) {
             chrome.tabs.sendMessage(tabId, { type: 'TRIGGER_TURNSTILE' }, { frameId: f.frameId }).catch(() => {});
           }
         }
