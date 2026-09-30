@@ -9,6 +9,7 @@ const PROVIDER_KEYS = [
   'solve_turnstile',
   'solve_funcaptcha',
   'solve_awscaptcha',
+  'solve_aliyun',
   'solve_textcaptcha',
   'solve_human',
   'solve_geetest',
@@ -112,6 +113,7 @@ function render(state, settings, logs, recState) {
       key === 'solve_turnstile' ||
       key === 'solve_textcaptcha' ||
       key === 'solve_geetest' ||
+      key === 'solve_aliyun' ||
       key === 'solve_funcaptcha'
     ) {
       isChecked = settings[key] !== false;
@@ -143,6 +145,9 @@ function render(state, settings, logs, recState) {
     } else if (p === 'geetest' || v === 'geetest') {
       badge.className = 'badge geetest';
       badge.textContent = 'geetest';
+    } else if (p === 'aliyun' || v === 'aliyun' || p === 'slider') {
+      badge.className = 'badge aliyun';
+      badge.textContent = 'aliyun';
     } else if (p === 'turnstile' || v === 'turnstile') {
       badge.className = 'badge turnstile';
       badge.textContent = 'turnstile';

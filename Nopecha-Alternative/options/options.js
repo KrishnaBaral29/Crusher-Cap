@@ -4,6 +4,7 @@ const PROVIDER_KEYS = [
   'solve_turnstile',
   'solve_funcaptcha',
   'solve_awscaptcha',
+  'solve_aliyun',
   'solve_textcaptcha',
   'solve_human',
   'solve_geetest',
@@ -29,6 +30,7 @@ const DEFAULTS = {
   solve_turnstile: true,
   solve_funcaptcha: true,
   solve_awscaptcha: false,
+  solve_aliyun: true,
   solve_textcaptcha: true,
   solve_human: false,
   solve_geetest: true,
@@ -81,6 +83,7 @@ chrome.storage.sync.get(DEFAULTS, (s) => {
       key === 'solve_turnstile' ||
       key === 'solve_textcaptcha' ||
       key === 'solve_geetest' ||
+      key === 'solve_aliyun' ||
       key === 'solve_funcaptcha'
     ) {
       isChecked = s[key] !== false;

@@ -181,6 +181,7 @@ h1 {
 .badge.v2 { background: var(--primary-bg); color: var(--primary-text); border: 1px solid var(--primary-border); }
 .badge.v3 { background: transparent; color: var(--text-color); border: 1px solid var(--border-color); }
 .badge.geetest { background: #06b6d4; color: #090d16; border: 1px solid #06b6d4; font-weight: 700; }
+.badge.aliyun { background: #ea580c; color: #ffffff; border: 1px solid #ea580c; font-weight: 700; }
 .badge.turnstile { background: #f97316; color: #090d16; border: 1px solid #f97316; font-weight: 700; }
 .badge.funcaptcha { background: #10b981; color: #090d16; border: 1px solid #10b981; font-weight: 700; }
 

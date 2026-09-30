@@ -16,6 +16,7 @@
   let detectedVersion = null;
   let autoTriggered = false;
   let funcaptchaDetected = false;
+  let aliyunDetected = false;
 
   let pageSettings = {
     enabled: true,
@@ -23,12 +24,13 @@
     autoClick: true,
     solve_recaptcha: true,
     solve_turnstile: true,
-    solve_funcaptcha: true
+    solve_funcaptcha: true,
+    solve_aliyun: true
   };
 
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
     try {
-      chrome.storage.sync.get(['enabled', 'autoSolve', 'autoClick', 'solve_recaptcha', 'solve_turnstile', 'solve_funcaptcha'], (s) => {
+      chrome.storage.sync.get(['enabled', 'autoSolve', 'autoClick', 'solve_recaptcha', 'solve_turnstile', 'solve_funcaptcha', 'solve_aliyun'], (s) => {
         if (s) pageSettings = { ...pageSettings, ...s };
       });
       chrome.storage.onChanged.addListener((changes, area) => {
@@ -368,9 +370,56 @@
     safeSendMessage({ type: 'AUTO_SOLVE_TURNSTILE' });
   }
 
+  function findAliyun() {
+    const specific = document.querySelector(
+      '[id*="aliyunCaptcha"], [class*="aliyunCaptcha"], [id*="aliyun-captcha"], [class*="aliyun-captcha"], [class*="baxia"], #captcha-element, .nc_scale, .nc_container'
+    );
+    if (specific) {
+      const text = specific.textContent || '';
+      const m = text.match(/CertifyId:\s*([a-zA-Z0-9_-]+)/i);
+      return { found: true, certifyId: m ? m[1] : null };
+    }
+
+    const containers = document.querySelectorAll('[role="dialog"], .modal, [class*="dialog"], [class*="modal"], div');
+    for (const c of containers) {
+      if (c === document.body || c === document.documentElement) continue;
+      const r = c.getBoundingClientRect();
+      if (r.width < 180 || r.height < 140 || r.width > 750 || r.height > 850) continue;
+      const txt = (c.textContent || '');
+      if (
+        txt.includes('CertifyId') ||
+        txt.includes('drag the slider to restore the complete image') ||
+        txt.includes('Please complete security verification') ||
+        txt.includes('请完成安全验证') ||
+        txt.includes('向右滑动验证') ||
+        txt.includes('拖动滑块完成拼图') ||
+        txt.includes('请拖动滑块')
+      ) {
+        const m = txt.match(/CertifyId:\s*([a-zA-Z0-9_-]+)/i);
+        return { found: true, certifyId: m ? m[1] : null };
+      }
+    }
+    return { found: false, certifyId: null };
+  }
+
   function detect() {
     if (!isContextValid()) return false;
     if (pageSettings.enabled === false) return false;
+
+    // scan aliyun captcha / universal slider
+    if (pageSettings.solve_aliyun !== false) {
+      const aliyun = findAliyun();
+      if (aliyun.found && !aliyunDetected) {
+        aliyunDetected = true;
+        log('detect: Aliyun / Slider CAPTCHA detected on page');
+        safeSendMessage({
+          type: 'DETECTED',
+          version: 'aliyun',
+          provider: 'aliyun',
+          sitekey: aliyun.certifyId || 'aliyun'
+        });
+      }
+    }
 
     // scan cloudflare turnstile
     if (pageSettings.solve_turnstile !== false) {

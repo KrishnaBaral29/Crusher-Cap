@@ -19,6 +19,7 @@ const DEFAULTS = {
   solve_turnstile: true,
   solve_funcaptcha: true,
   solve_awscaptcha: false,
+  solve_aliyun: true,
   solve_textcaptcha: true,
   solve_human: false,
   solve_geetest: true,
@@ -147,6 +148,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         t.version = 'geetest';
         t.sitekey = msg.gt || 'geetest';
         ccLog(tabId, 'DETECTED GeeTest CAPTCHA');
+        sendResponse({ ok: true, settings: safeSettings() });
+        break;
+      }
+
+      if (msg.provider === 'aliyun' || msg.version === 'aliyun' || msg.provider === 'slider') {
+        t.provider = 'aliyun';
+        t.version = 'aliyun';
+        t.sitekey = msg.sitekey || 'aliyun';
+        ccLog(tabId, 'DETECTED Aliyun / Slider CAPTCHA (CertifyId: ' + (msg.sitekey || 'none') + ')');
+        updateBadge(tabId, 'SLIDE', '#f97316');
+        if (settings.solve_aliyun === false) {
+          ccLog(tabId, 'Aliyun solver is toggled OFF in Providers settings', 'warn');
+        } else if (settings.enabled && settings.autoSolve) {
+          setStatus(tabId, 'working', 'Aliyun CAPTCHA detected — solving slider challenge...', 0);
+          chrome.tabs.sendMessage(tabId, { type: 'ALIYUN_SOLVE' }).catch(() => {});
+        }
         sendResponse({ ok: true, settings: safeSettings() });
         break;
       }
@@ -380,6 +397,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      if (t.provider === 'aliyun' || t.version === 'aliyun') {
+        if (!settings.solve_aliyun) {
+          sendResponse({ ok: false, error: 'Aliyun / Slider solver is disabled in Providers settings.' });
+          break;
+        }
+        setStatus(msg.tabId, 'working', 'Manual solve triggered — solving Aliyun slider', 0);
+        ccLog(msg.tabId, 'SOLVE_TAB: triggering Aliyun slider solver...');
+        chrome.tabs.sendMessage(msg.tabId, { type: 'ALIYUN_SOLVE' }).catch(() => {});
+        sendResponse({ ok: true });
+        break;
+      }
       if (t.provider === 'funcaptcha' || t.version === 'funcaptcha') {
         if (!settings.solve_funcaptcha) {
           sendResponse({ ok: false, error: 'FunCAPTCHA solver is disabled in Providers settings.' });
@@ -397,6 +425,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       if (t.version == null) {
         chrome.tabs.sendMessage(msg.tabId, { type: 'GEETEST_SOLVE' }).catch(() => {});
+        chrome.tabs.sendMessage(msg.tabId, { type: 'ALIYUN_SOLVE' }).catch(() => {});
         chrome.tabs.sendMessage(msg.tabId, { type: 'TEXT_CAPTCHA_SCAN' }).catch(() => {});
         sendResponse({ ok: false, error: 'No captcha detected on this tab yet. Reload the page once.' });
         break;
@@ -660,6 +689,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
+    case 'CDP_DRAG': {
+      const targetTabId = tabId || sender?.tab?.id || msg.tabId;
+      if (!targetTabId) {
+        sendResponse({ ok: false, error: 'no tabId for CDP drag' });
+        break;
+      }
+      dispatchCdpDrag(targetTabId, msg.startX, msg.startY, msg.targetX, msg.targetY)
+        .then((ok) => sendResponse({ ok }))
+        .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+      return true;
+    }
+
+    case 'ALIYUN_CALCULATE_GAP': {
+      if (!settings.enabled || settings.solve_aliyun === false) {
+        sendResponse({ ok: false, error: 'Aliyun solver is disabled' });
+        return true;
+      }
+      calculateGeeTestGap(tabId, msg)
+        .then((res) => sendResponse({ ok: true, ...res }))
+        .catch((e) => {
+          ccLog(tabId, 'ALIYUN_GAP: failed: ' + (e.message || e), 'error');
+          sendResponse({ ok: false, error: String(e.message || e) });
+        });
+      return true;
+    }
+
     case 'RESET_STATS': {
       settings.solvedCount = 0;
       chrome.storage.sync.set({ solvedCount: 0 });
@@ -797,6 +852,104 @@ async function dispatchCdpClick(tabId, x, y) {
     return true;
   } catch (err) {
     ccLog(tabId, 'CDP dispatchMouseEvent error: ' + (err.message || err), 'warn');
+    return false;
+  } finally {
+    try {
+      await chrome.debugger.detach(target);
+    } catch {}
+  }
+}
+
+async function dispatchCdpDrag(tabId, startX, startY, targetX, targetY) {
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+  } catch (err) {
+    if (!String(err.message).includes('already attached')) {
+      ccLog(tabId, 'CDP attach note: ' + (err.message || err), 'warn');
+      return false;
+    }
+  }
+
+  try {
+    // 1. Move cursor to start handle position
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(startX),
+      y: Math.round(startY),
+      buttons: 0
+    });
+    await new Promise((r) => setTimeout(r, 60 + Math.random() * 40));
+
+    chrome.tabs.sendMessage(tabId, { type: 'SHOW_CLICK_ANIM', x: Math.round(startX), y: Math.round(startY) }).catch(() => {});
+
+    // 2. Mouse pressed on handle (buttons: 1, button: 'left')
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      button: 'left',
+      buttons: 1,
+      x: Math.round(startX),
+      y: Math.round(startY),
+      clickCount: 1
+    });
+    await new Promise((r) => setTimeout(r, 80 + Math.random() * 50));
+
+    // 3. Humanoid drag trajectory
+    const totalDistanceX = targetX - startX;
+    const totalDistanceY = targetY - startY;
+    const steps = 30 + Math.floor(Math.random() * 12);
+
+    for (let i = 1; i <= steps; i++) {
+      const progress = i / steps;
+      let ease;
+      if (progress < 0.25) {
+        ease = (progress / 0.25) * (progress / 0.25) * 0.12;
+      } else {
+        const p = (progress - 0.25) / 0.75;
+        ease = 0.12 + 0.88 * (1 - Math.pow(1 - p, 2.4));
+      }
+
+      const curX = Math.round(startX + totalDistanceX * ease);
+      const jitterY = (Math.sin(progress * Math.PI) * 1.5) + (Math.random() - 0.5) * 0.8;
+      const curY = Math.round(startY + totalDistanceY * progress + jitterY);
+
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: curX,
+        y: curY,
+        buttons: 1
+      }).catch(() => {});
+
+      const stepDelay = 12 + Math.floor(Math.random() * 8);
+      await new Promise((r) => setTimeout(r, stepDelay));
+    }
+
+    // Move precisely to final target position
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(targetX),
+      y: Math.round(targetY),
+      buttons: 1
+    });
+
+    // Human hold delay before release
+    await new Promise((r) => setTimeout(r, 140 + Math.random() * 80));
+
+    // 4. Mouse released at target
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      button: 'left',
+      buttons: 0,
+      x: Math.round(targetX),
+      y: Math.round(targetY),
+      clickCount: 1
+    });
+
+    await new Promise((r) => setTimeout(r, 80));
+    ccLog(tabId, 'CDP drag executed successfully: distance=' + Math.round(totalDistanceX) + 'px to (' + Math.round(targetX) + ',' + Math.round(targetY) + ')');
+    return true;
+  } catch (err) {
+    ccLog(tabId, 'CDP drag error: ' + (err.message || err), 'warn');
     return false;
   } finally {
     try {
