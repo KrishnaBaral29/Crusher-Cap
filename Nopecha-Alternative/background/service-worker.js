@@ -770,6 +770,121 @@ async function dispatchCdpClick(tabId, x, y) {
   }
 }
 
+// CDP-based Turnstile coordinate finder — bypasses content script cross-origin limitations
+async function findTurnstileCoordsCDP(tabId) {
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+  } catch (err) {
+    if (!String(err.message).includes('already attached')) {
+      return { ok: false, error: 'CDP attach failed: ' + (err.message || err) };
+    }
+  }
+
+  try {
+    // execute JS in the page context to find Turnstile iframe or checkbox
+    const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `
+        (function() {
+          // scan all iframes for Cloudflare challenge patterns
+          var iframes = document.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            var src = (iframes[i].src || '').toLowerCase();
+            if (src.indexOf('challenge-platform') !== -1 ||
+                src.indexOf('challenges.cloudflare') !== -1 ||
+                src.indexOf('turnstile') !== -1 ||
+                src.indexOf('cdn-cgi') !== -1 ||
+                src.indexOf('cf-chl') !== -1) {
+              var rect = iframes[i].getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                return JSON.stringify({
+                  ok: true,
+                  x: Math.round(rect.left + Math.min(32, Math.max(25, rect.width * 0.11))),
+                  y: Math.round(rect.top + rect.height / 2),
+                  source: 'cdp-iframe-scan',
+                  w: Math.round(rect.width),
+                  h: Math.round(rect.height)
+                });
+              }
+            }
+          }
+
+          // fallback: look for challenge containers
+          var containers = ['#challenge-stage', '#cf-stage', '#challenge-form',
+                           '.cf-turnstile', '#cf-chl-widget', '[data-turnstile]',
+                           '.ctp-checkbox-container', '#turnstile-wrapper'];
+          for (var j = 0; j < containers.length; j++) {
+            var el = document.querySelector(containers[j]);
+            if (el) {
+              // check if it has an iframe child
+              var childIframe = el.querySelector('iframe');
+              if (childIframe) {
+                var cr = childIframe.getBoundingClientRect();
+                if (cr.width > 0 && cr.height > 0) {
+                  return JSON.stringify({
+                    ok: true,
+                    x: Math.round(cr.left + Math.min(32, Math.max(25, cr.width * 0.11))),
+                    y: Math.round(cr.top + cr.height / 2),
+                    source: 'cdp-container-iframe',
+                    w: Math.round(cr.width),
+                    h: Math.round(cr.height)
+                  });
+                }
+              }
+              // use container itself
+              var cr2 = el.getBoundingClientRect();
+              if (cr2.width > 0 && cr2.height > 0) {
+                return JSON.stringify({
+                  ok: true,
+                  x: Math.round(cr2.left + 30),
+                  y: Math.round(cr2.top + cr2.height / 2),
+                  source: 'cdp-container',
+                  w: Math.round(cr2.width),
+                  h: Math.round(cr2.height)
+                });
+              }
+            }
+          }
+
+          // last resort: find "Verify you are human" input checkbox
+          var inputs = document.querySelectorAll('input[type="checkbox"]');
+          for (var k = 0; k < inputs.length; k++) {
+            var ir = inputs[k].getBoundingClientRect();
+            if (ir.width > 0 && ir.height > 0) {
+              return JSON.stringify({
+                ok: true,
+                x: Math.round(ir.left + ir.width / 2),
+                y: Math.round(ir.top + ir.height / 2),
+                source: 'cdp-checkbox',
+                w: Math.round(ir.width),
+                h: Math.round(ir.height)
+              });
+            }
+          }
+
+          return JSON.stringify({ ok: false, error: 'CDP scan found no Turnstile elements' });
+        })()
+      `,
+      returnByValue: true
+    });
+
+    if (evalResult && evalResult.result && evalResult.result.value) {
+      try {
+        return JSON.parse(evalResult.result.value);
+      } catch {
+        return { ok: false, error: 'CDP parse error' };
+      }
+    }
+    return { ok: false, error: 'CDP eval returned no result' };
+  } catch (err) {
+    return { ok: false, error: 'CDP eval error: ' + (err.message || err) };
+  } finally {
+    try {
+      await chrome.debugger.detach(target);
+    } catch {}
+  }
+}
+
 const activeTurnstileSolves = new Set();
 
 async function solveTurnstile(tabId, source = 'auto') {
@@ -813,8 +928,14 @@ async function solveTurnstile(tabId, source = 'auto') {
       setStatus(tabId, 'working', 'Clicking Turnstile verification checkbox (attempt ' + attempt + '/3)...', attempt);
       ccLog(tabId, 'TURNSTILE: locating widget coordinates (attempt ' + attempt + ')...');
 
-      // request viewport coordinates
-      const coords = await chrome.tabs.sendMessage(tabId, { type: 'GET_TURNSTILE_COORDS' }, { frameId: 0 }).catch(() => null);
+      // Strategy A: request viewport coordinates from content script (page.js)
+      let coords = await chrome.tabs.sendMessage(tabId, { type: 'GET_TURNSTILE_COORDS' }, { frameId: 0 }).catch(() => null);
+
+      // Strategy B: CDP fallback — use debugger to find iframe directly in the DOM
+      if (!coords || !coords.ok) {
+        ccLog(tabId, 'TURNSTILE: content-script coords failed — trying CDP DOM scan...', 'warn');
+        coords = await findTurnstileCoordsCDP(tabId);
+      }
 
       let clickedCdp = false;
       if (coords && coords.ok && coords.x > 0 && coords.y > 0) {
@@ -830,7 +951,7 @@ async function solveTurnstile(tabId, source = 'auto') {
           ccLog(tabId, 'TURNSTILE: native CDP click successfully dispatched');
         }
       } else {
-        ccLog(tabId, 'TURNSTILE: coordinates unavailable from main page (' + ((coords && coords.error) || 'no coords') + ') — trying frame-level fallback', 'warn');
+        ccLog(tabId, 'TURNSTILE: all coord strategies failed (' + ((coords && coords.error) || 'no coords') + ') — trying frame-level fallback', 'warn');
       }
 
       // broadcast trigger message to all Cloudflare challenge frames
@@ -864,6 +985,7 @@ async function solveTurnstile(tabId, source = 'auto') {
         await new Promise((r) => setTimeout(r, 1000));
       }
     }
+
 
     setStatus(tabId, 'failed', 'Turnstile verification timed out or required manual interaction');
     ccLog(tabId, 'TURNSTILE: solver completed without verified token', 'warn');
