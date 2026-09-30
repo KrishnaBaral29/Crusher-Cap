@@ -275,7 +275,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'RECORDING_COMPLETE': {
       const recTab = recordingState.tabId || tabId || 0;
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `Nopecha-Alternative/Recordings/recording_${ts}.webm`;
+      const filename = `webshare automation/Nopecha-Alternative/Recordings/recording_${ts}.webm`;
 
       chrome.downloads.download({
         url: msg.dataUrl,
